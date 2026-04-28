@@ -75,6 +75,47 @@ powershell -ExecutionPolicy Bypass -File .\export_docx_styles.ps1 -DocxPath "D:\
 - 加粗会保留
 - 倾斜会用 Photoshop 的仿斜体效果
 
+### 四点五、常驻面板（推荐）
+
+如果你想要类似插件的持续交互窗口：
+
+1. 在 Photoshop 中执行 `文件 > 脚本 > 浏览...`
+2. 选择 `C:\Users\Administrator\word-to-photoshop\import_panel.jsx`
+3. 面板会常驻，可反复操作：
+   - 自动扫描当前 PSD 对应 `.jsxdata`
+   - 页码与段落数预览
+   - 导入当前页 / 导入全部页
+   - 直接修改布局参数并导入
+   - 查看导入日志与错误明细
+
+绑定规则：
+- 优先当前 PSD 同目录同名（或同目录可用）`.jsxdata`
+- 若未匹配到，会显示“未绑定”，必须手动选择数据文件后才能导入
+
+### 四点六、UXP 可停靠插件面板（主流程，推荐）
+
+如果你想要真正的 Photoshop 插件面板体验（可停靠、可折叠、和原生面板一样管理），请使用 UXP 版本：
+
+1. 打开 **UXP Developer Tool**
+2. 选择 **Add Plugin**，指向：
+   - `C:\Users\Administrator\word-to-photoshop\uxp-plugin\manifest.json`
+3. 点击 **Load / Reload**
+4. 在 Photoshop 中打开插件面板：
+   - `插件 > 开发者 > Word Import`（名称可能随 UXP 工具显示略有差异）
+
+UXP 面板能力：
+- PSD 与 `.jsxdata` 自动绑定（可手动覆盖）
+- 仅显示页码列表预览（`#001` 等）
+- 中文参数编辑（字号、起始坐标、间距等）
+- 当前页/全部页导入
+- 日志面板（替代频繁弹窗）
+
+### 四点七、JSX 兼容 fallback（旧流程）
+
+若 UXP 面板暂时不可用，仍可继续使用旧脚本流程：
+- `import_to_photoshop.jsx`（一次性导入流程）
+- `import_panel.jsx`（ScriptUI 常驻窗口）
+
 ### 常见问题（快速排错）
 
 1. **脚本提示找不到页码**：检查 Word 里是否每页前都有单独一段 `#001` 这种页码标记（`#1/#01/#001` 都行）。

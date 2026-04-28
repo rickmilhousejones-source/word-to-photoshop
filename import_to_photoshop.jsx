@@ -7,56 +7,113 @@ Settings are read from settings.json beside this script.
 */
 
 (function () {
-  if (app.name !== "Adobe Photoshop") {
-    alert("请在 Photoshop 中运行此脚本。");
-    return;
+  function runQuickImport() {
+    if (app.name !== "Adobe Photoshop") {
+      alert("请在 Photoshop 中运行此脚本。");
+      return;
+    }
+
+    if (app.documents.length === 0) {
+      app.documents.add(1920, 1080, 72, "Word Import");
+    }
+
+    var scriptFile = new File($.fileName);
+    var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
+    var cfg = loadSettings(settingsFile);
+
+    var dataFile = pickDataFile(app.activeDocument, cfg, scriptFile);
+    if (!dataFile) return;
+
+    var payload;
+    try {
+      payload = readDataFile(dataFile);
+    } catch (e) {
+      alert("读取导入数据失败: " + e.message);
+      return;
+    }
+
+    if (!payload || !payload.pages || !payload.pages.length) {
+      alert("导入数据为空或格式不正确（缺少 pages）。");
+      return;
+    }
+
+    try { persistLastDataFileIfNeeded(cfg, settingsFile, dataFile); } catch (_) {}
+
+    var defaultPage = guessPageFromDocument(app.activeDocument, payload.pages) || payload.pages[0].page;
+    var selection = pickImportSelection(payload.pages, defaultPage, cfg);
+    if (!selection) return;
+
+    var result = performImport(app.activeDocument, payload, selection, cfg, null);
+    alert(formatImportSummary(result));
   }
 
-  if (app.documents.length === 0) {
-    app.documents.add(1920, 1080, 72, "Word Import");
+  function buildDefaultContext() {
+    if (app.name !== "Adobe Photoshop") throw new Error("请在 Photoshop 中运行此脚本。");
+    if (app.documents.length === 0) app.documents.add(1920, 1080, 72, "Word Import");
+
+    var doc = app.activeDocument;
+    var scriptFile = new File($.fileName);
+    var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
+    var cfg = loadSettings(settingsFile);
+    var autoDataFile = tryAutoPickDataFile(doc, cfg);
+    var payload = null;
+    if (autoDataFile && autoDataFile.exists) {
+      try { payload = readDataFile(autoDataFile); } catch (_) { payload = null; }
+    }
+    var defaultPage = (payload && payload.pages && payload.pages.length) ? (guessPageFromDocument(doc, payload.pages) || payload.pages[0].page) : "001";
+    return {
+      doc: doc,
+      scriptFile: scriptFile,
+      settingsFile: settingsFile,
+      cfg: cfg,
+      autoDataFile: autoDataFile,
+      payload: payload,
+      defaultPage: normalizePageNumber(defaultPage)
+    };
   }
 
-  var scriptFile = new File($.fileName);
-  var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
-  var cfg = loadSettings(settingsFile);
-
-  var dataFile = pickDataFile(app.activeDocument, cfg, scriptFile);
-  if (!dataFile) return;
-
-  var payload;
-  try {
-    payload = readDataFile(dataFile);
-  } catch (e) {
-    alert("读取导入数据失败: " + e.message);
-    return;
+  function chooseDataFile() {
+    return File.openDialog("选择由 export_docx_styles.ps1 导出的 .jsxdata 文件", "*.jsxdata;*.js");
   }
 
-  if (!payload || !payload.pages || !payload.pages.length) {
-    alert("导入数据为空或格式不正确（缺少 pages）。");
-    return;
+  function readPayloadFromFile(file) {
+    if (!file) return null;
+    return readDataFile(file);
   }
 
-  try { persistLastDataFileIfNeeded(cfg, settingsFile, dataFile); } catch (_) {}
+  function saveSettingsToDisk(settingsFile, cfg) {
+    if (!settingsFile || !cfg) return;
+    settingsFile.encoding = "UTF-8";
+    if (!settingsFile.open("w")) throw new Error("无法写入 settings.json");
+    try {
+      settingsFile.write(prettyJSONStringify(cfg));
+    } finally {
+      settingsFile.close();
+    }
+  }
 
-  var defaultPage = guessPageFromDocument(app.activeDocument, payload.pages) || payload.pages[0].page;
-  var selection = pickImportSelection(payload.pages, defaultPage, cfg);
-  if (!selection) return;
+  function performImport(doc, payload, selection, cfg, logger) {
+    if (!doc) throw new Error("没有打开的文档");
+    if (!payload || !payload.pages || !payload.pages.length) throw new Error("导入数据为空或格式不正确（缺少 pages）");
+    if (!selection || !selection.mode) throw new Error("导入模式无效");
 
-  var doc = app.activeDocument;
-  var baseProbeLayer = createTextLayer(doc, cfg, selection.page || "000", 0);
-  var font = resolveFonts(cfg, baseProbeLayer);
-  baseProbeLayer.remove();
+    var baseProbeLayer = createTextLayer(doc, cfg, selection.page || "000", 0);
+    var font = resolveFonts(cfg, baseProbeLayer);
+    baseProbeLayer.remove();
 
-  if (selection.mode === "allPages") {
+    var result = null;
     runWithPixelUnits(function () {
-      var allResult = importAllPages(doc, payload.pages, font, cfg);
-      alert(formatImportSummary(allResult));
+      if (selection.mode === "allPages") {
+        result = importAllPages(doc, payload.pages, font, cfg);
+      } else {
+        result = importOnePage(doc, payload.pages, selection.page, font, cfg, { suppressAlert: true });
+      }
     });
-  } else {
-    runWithPixelUnits(function () {
-      var oneResult = importOnePage(doc, payload.pages, selection.page, font, cfg, { suppressAlert: true });
-      alert(formatImportSummary(oneResult));
-    });
+
+    if (logger) {
+      logger(formatImportSummary(result));
+    }
+    return result;
   }
 
   function loadSettings(f) {
@@ -1014,5 +1071,19 @@ Settings are read from settings.json beside this script.
     desc.putUnitDouble(stringIDToTypeID("size"), charIDToTypeID("#Pnt"), fontSizePt);
     desc.putUnitDouble(stringIDToTypeID("impliedFontSize"), charIDToTypeID("#Pnt"), fontSizePt);
     desc.putBoolean(stringIDToTypeID("autoLeading"), true);
+  }
+
+  $.global.WORD_IMPORT_API = {
+    buildDefaultContext: buildDefaultContext,
+    chooseDataFile: chooseDataFile,
+    readPayloadFromFile: readPayloadFromFile,
+    saveSettingsToDisk: saveSettingsToDisk,
+    performImport: performImport,
+    normalizePageNumber: normalizePageNumber,
+    formatImportSummary: formatImportSummary
+  };
+
+  if (!$.global.WORD_IMPORT_PANEL_MODE) {
+    runQuickImport();
   }
 })();

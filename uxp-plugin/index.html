@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Word Import Panel</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <section class="card">
+        <h3>文件绑定</h3>
+        <div id="docName" class="line">PSD: -</div>
+        <div id="dataName" class="line warn">数据: 未绑定</div>
+        <div class="row">
+          <button id="btnRefresh">重新扫描</button>
+          <button id="btnPickData">手动选择数据</button>
+          <button id="btnPickSettings">选择设置文件</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>页码预览</h3>
+        <select id="pageList" size="8"></select>
+        <div id="pageInfo" class="line">页信息: -</div>
+      </section>
+
+      <section class="card">
+        <h3>布局参数</h3>
+        <div class="grid">
+          <label>字号 <input id="fontSizePt" type="number" /></label>
+          <label>起始X <input id="startX" type="number" /></label>
+          <label>起始Y <input id="startY" type="number" /></label>
+          <label>文本框宽 <input id="boxWidth" type="number" /></label>
+          <label>文本框高 <input id="boxHeight" type="number" /></label>
+          <label>垂直间距 <input id="verticalGap" type="number" /></label>
+          <label>水平间距 <input id="horizontalGap" type="number" /></label>
+          <label>底部留白 <input id="marginBottom" type="number" /></label>
+          <label>右侧留白 <input id="marginRight" type="number" /></label>
+          <label>最小列距 <input id="minHorizontalGap" type="number" /></label>
+        </div>
+        <div class="row">
+          <label><input id="wrapToNextColumn" type="checkbox" /> 自动换列</label>
+          <label><input id="autoHorizontalGap" type="checkbox" /> 自动列间距</label>
+          <label><input id="useArtboardBounds" type="checkbox" /> 使用画板坐标</label>
+        </div>
+        <div class="row">
+          <button id="btnSaveDefaults">保存为默认</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>导入操作</h3>
+        <div class="row">
+          <button id="btnImportCurrent">导入当前页</button>
+          <button id="btnImportAll">导入全部页</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>日志</h3>
+        <textarea id="logBox" readonly></textarea>
+        <div class="row">
+          <button id="btnCopyLog">复制日志</button>
+          <button id="btnClearLog">清空日志</button>
+        </div>
+      </section>
+    </div>
+    <script src="./main.js"></script>
+  </body>
+</html>
