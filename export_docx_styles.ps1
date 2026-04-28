@@ -17,7 +17,9 @@ param(
 
   [string] $OutFile,
 
-  [switch] $IncludeEmptyParagraphs
+  [switch] $IncludeEmptyParagraphs,
+
+  [switch] $Minify
 )
 
 Set-StrictMode -Version Latest
@@ -259,6 +261,8 @@ function Group-ParagraphsByPage([object]$paragraphs) {
 function Build-ExportPayload([string]$docxFullPath, [object]$groupedPages) {
   return [pscustomobject]@{
     version = 2
+    exportedAt = (Get-Date).ToString('o')
+    docxFileName = [System.IO.Path]::GetFileName($docxFullPath)
     source  = [pscustomobject]@{
       type = 'docx'
       path = $docxFullPath
@@ -269,8 +273,12 @@ function Build-ExportPayload([string]$docxFullPath, [object]$groupedPages) {
   }
 }
 
-function ConvertTo-PhotoshopDataFile([object]$payload) {
-  $json = $payload | ConvertTo-Json -Depth 50
+function ConvertTo-PhotoshopDataFile([object]$payload, [switch]$Minify) {
+  $json = if ($Minify) {
+    $payload | ConvertTo-Json -Depth 50 -Compress
+  } else {
+    $payload | ConvertTo-Json -Depth 50
+  }
   return @"
 var WORD_IMPORT_DATA = $json;
 "@
@@ -298,7 +306,7 @@ if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
   New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 }
 
-[System.IO.File]::WriteAllText($outFull, (ConvertTo-PhotoshopDataFile -payload $payload), [System.Text.Encoding]::UTF8)
+[System.IO.File]::WriteAllText($outFull, (ConvertTo-PhotoshopDataFile -payload $payload -Minify:$Minify), [System.Text.Encoding]::UTF8)
 
 Write-Host "Wrote Photoshop data: $outFull"
 Write-Host ("Pages found: " + $payload.pages.Count)

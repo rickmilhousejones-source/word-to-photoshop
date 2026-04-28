@@ -8,6 +8,19 @@
   "boxWidth": 900,
   "boxHeight": 180,
   "verticalGap": 24,
+  "horizontalGap": 24,
+  "marginBottom": 50,
+  "marginRight": 50,
+  "autoHorizontalGap": true,
+  "minHorizontalGap": 16,
+  "useArtboardBounds": true,
+  "wrapToNextColumn": true,
   "useFauxBoldFallback": true,
-  "useFauxItalic": true
+  "useFauxItalic": true,
+  "rememberLastDataFile": true,
+  "lastDataFile": "",
+  "importMode": "currentPage",
+  "groupLayersByPage": true,
+  "removePreviousImports": false,
+  "refreshEveryN": 20
 }

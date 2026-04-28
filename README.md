@@ -31,6 +31,14 @@ powershell -ExecutionPolicy Bypass -File .\export_docx_styles.ps1
 1. 选择你的 Word 翻译稿 `.docx`
 2. 选择导出的 `.jsxdata` 保存位置
 
+也可以用命令行一键导出（无弹窗）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\export_docx_styles.ps1 -DocxPath "D:\work\trans.docx" -OutFile "D:\work\trans.jsxdata" -Minify
+```
+
+- `-Minify`：输出更紧凑的 `.jsxdata`，读取更快、文件更小（推荐）。
+
 ### 三、先设置字号和基础排版
 
 打开：
@@ -45,6 +53,10 @@ powershell -ExecutionPolicy Bypass -File .\export_docx_styles.ps1
 - `boxWidth`：文本框宽度
 - `boxHeight`：文本框高度
 - `verticalGap`：每个文本框之间的垂直间距
+- `refreshEveryN`：导入大量段落时每 N 段刷新一次 UI（默认 20）
+- `importMode`：默认导入模式（`currentPage` / `allPages`）
+- `rememberLastDataFile`：是否记住上次导入的 `.jsxdata` 路径
+- `lastDataFile`：上次导入的 `.jsxdata` 路径（脚本会自动写入）
 
 如果只是想调大调小字体，通常改 `fontSizePt` 就够了。
 
@@ -53,15 +65,21 @@ powershell -ExecutionPolicy Bypass -File .\export_docx_styles.ps1
 1. 打开当前这一页对应的 PSD
 2. `文件 > 脚本 > 浏览...`
 3. 选择 `C:\Users\Administrator\word-to-photoshop\import_to_photoshop.jsx`
-4. 选择刚才导出的 `.jsxdata`
+4. 脚本会优先自动定位要导入的 `.jsxdata`（同目录同名优先，其次使用上次记住的路径）；找不到时才会弹窗让你选
 5. 脚本会优先根据当前 PSD 文件名自动猜页码
-6. 确认页码后导入
+6. 在窗口里选择“仅导入当前页 / 导入全部页”，确认后导入
 
 导入后效果：
 - Word 里每个段落会生成一个独立文本框
 - 字体固定为微软雅黑
 - 加粗会保留
 - 倾斜会用 Photoshop 的仿斜体效果
+
+### 常见问题（快速排错）
+
+1. **脚本提示找不到页码**：检查 Word 里是否每页前都有单独一段 `#001` 这种页码标记（`#1/#01/#001` 都行）。
+2. **导入很慢**：优先用 `-Minify` 导出；导入端可把 `refreshEveryN` 调大（例如 50）减少 UI 刷新频率。
+3. **字体不对**：确保系统已安装微软雅黑；可在 `settings.json` 里调整 `fontFamilyNames` / `fontRegularCandidates` / `fontBoldCandidates`。
 
 ### 五、日常使用建议
 
