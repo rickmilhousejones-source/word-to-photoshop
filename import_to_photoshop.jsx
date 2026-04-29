@@ -40,7 +40,12 @@ Settings are read from settings.json beside this script.
     try { persistLastDataFileIfNeeded(cfg, settingsFile, dataFile); } catch (_) {}
 
     var defaultPage = guessPageFromDocument(app.activeDocument, payload.pages) || payload.pages[0].page;
-    var selection = pickImportSelection(payload.pages, defaultPage, cfg);
+    var selection = null;
+    if ($.global.WORD_IMPORT_FORCE_CURRENT_PAGE) {
+      selection = { mode: "currentPage", page: normalizePageNumber(defaultPage) };
+    } else {
+      selection = pickImportSelection(payload.pages, defaultPage, cfg);
+    }
     if (!selection) return;
 
     var result = performImport(app.activeDocument, payload, selection, cfg, null);

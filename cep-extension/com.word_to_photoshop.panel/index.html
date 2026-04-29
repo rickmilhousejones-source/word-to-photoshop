@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>Word Import CEP</title>
+    <link rel="stylesheet" href="./client/style.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <h2>漫画汉化导入助手（CEP）</h2>
+      <p class="hint">CEP 面板负责入口与按钮；导入核心仍使用项目内 `import_panel.jsx` / `import_to_photoshop.jsx`。</p>
+
+      <div class="card">
+        <button id="btnOpenPanel">打开完整导入面板（推荐）</button>
+        <button id="btnQuickImport">快速导入（一次性流程）</button>
+      </div>
+
+      <div class="card">
+        <button id="btnPing">检查 CEP / Photoshop 连接</button>
+      </div>
+
+      <textarea id="logBox" readonly></textarea>
+    </div>
+
+    <script src="./client/main.js"></script>
+  </body>
+</html>

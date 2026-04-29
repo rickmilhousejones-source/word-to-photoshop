@@ -32,6 +32,16 @@
   w.orientation = "column";
   w.alignChildren = "fill";
 
+  var topBar = w.add("group");
+  topBar.orientation = "row";
+  topBar.alignment = "fill";
+  topBar.add("statictext", undefined, "Word Import Panel");
+  var topSpacer = topBar.add("statictext", undefined, "");
+  topSpacer.alignment = ["fill", "center"];
+  var btnClosePanel = topBar.add("button", undefined, "×");
+  btnClosePanel.preferredSize = [24, 24];
+  btnClosePanel.helpTip = "关闭面板";
+
   var bindingPanel = w.add("panel", undefined, "文件绑定");
   bindingPanel.orientation = "column";
   bindingPanel.alignChildren = "fill";
@@ -86,7 +96,6 @@
   actionPanel.alignChildren = "left";
   var btnImportCurrent = actionPanel.add("button", undefined, "导入当前页");
   var btnImportAll = actionPanel.add("button", undefined, "导入全部页");
-  var btnClosePanel = actionPanel.add("button", undefined, "关闭面板");
 
   var logPanel = w.add("panel", undefined, "日志");
   logPanel.orientation = "column";

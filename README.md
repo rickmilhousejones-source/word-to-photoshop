@@ -92,9 +92,53 @@ powershell -ExecutionPolicy Bypass -File .\export_docx_styles.ps1 -DocxPath "D:\
 - 优先当前 PSD 同目录同名（或同目录可用）`.jsxdata`
 - 若未匹配到，会显示“未绑定”，必须手动选择数据文件后才能导入
 
-### 四点六、UXP 可停靠插件面板（主流程，推荐）
+### 四点六、CEP 旧版可停靠面板（当前主流程，推荐）
 
-如果你想要真正的 Photoshop 插件面板体验（可停靠、可折叠、和原生面板一样管理），请使用 UXP 版本：
+考虑到国内网络环境与 Creative Cloud 安装稳定性，当前主线改为 CEP 面板壳（调用现有 JSX 导入逻辑）。
+
+CEP 面板目录：
+
+- `C:\Users\Administrator\word-to-photoshop\cep-extension\com.word_to_photoshop.panel`
+
+一键安装（给测试用户，双击即可）：
+
+1. 双击 `install_cep.cmd`
+2. 重启 Photoshop
+3. 打开 `窗口 > 扩展(旧版) > Word Import CEP`
+
+一键卸载：
+
+1. 双击 `uninstall_cep.cmd`
+2. 重启 Photoshop
+
+手动安装（开发侧）：
+
+1. 开启 CEP 调试模式（管理员 PowerShell）：
+
+```powershell
+reg add "HKCU\Software\Adobe\CSXS.10" /v PlayerDebugMode /t REG_SZ /d 1 /f
+reg add "HKCU\Software\Adobe\CSXS.11" /v PlayerDebugMode /t REG_SZ /d 1 /f
+reg add "HKCU\Software\Adobe\CSXS.12" /v PlayerDebugMode /t REG_SZ /d 1 /f
+```
+
+2. 把扩展目录复制到 CEP 扩展目录（示例）：
+
+```powershell
+mkdir "$env:APPDATA\Adobe\CEP\extensions" -Force
+robocopy "C:\Users\Administrator\word-to-photoshop\cep-extension\com.word_to_photoshop.panel" "$env:APPDATA\Adobe\CEP\extensions\com.word_to_photoshop.panel" /E
+```
+
+3. 重启 Photoshop 后打开：
+   - `窗口 > 扩展(旧版) > Word Import CEP`
+4. 在 CEP 面板中点击：
+   - `打开 ScriptUI 常驻面板`（调用 `import_panel.jsx`）
+   - 或 `执行一次性导入`（调用 `import_to_photoshop.jsx`）
+
+### 四点七、UXP 可停靠插件面板（暂停开发）
+
+UXP 版本代码仍保留在 `uxp-plugin`，但当前不作为主流程；后续网络与分发条件成熟后再恢复推进。
+
+历史 UXP 流程（暂不推荐）：
 
 1. 打开 **UXP Developer Tool**
 2. 选择 **Add Plugin**，指向：
@@ -110,7 +154,7 @@ UXP 面板能力：
 - 当前页/全部页导入
 - 日志面板（替代频繁弹窗）
 
-### 四点七、JSX 兼容 fallback（旧流程）
+### 四点八、JSX 兼容 fallback（稳定保底）
 
 若 UXP 面板暂时不可用，仍可继续使用旧脚本流程：
 - `import_to_photoshop.jsx`（一次性导入流程）
