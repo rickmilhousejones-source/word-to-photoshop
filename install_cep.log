@@ -1,0 +1,52 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260430073203
+Username: DESKTOP-5S1EKM0\Bone
+RunAs User: DESKTOP-5S1EKM0\Bone
+Configuration Name: 
+Machine: DESKTOP-5S1EKM0 (Microsoft Windows NT 10.0.22621.0)
+Host Application: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\install_cep.ps1
+Process ID: 7552
+PSVersion: 5.1.22621.3880
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.22621.3880
+BuildVersion: 10.0.22621.3880
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+[INFO] Installing CEP extension: com.word_to_photoshop.panel
+[INFO] Existing version found, removing first: C:\Users\whhai\AppData\Roaming\Adobe\CEP\extensions\com.word_to_photoshop.panel
+[INFO] Copying extension files to: C:\Users\whhai\AppData\Roaming\Adobe\CEP\extensions\com.word_to_photoshop.panel
+[OK]   Extension files copied to: C:\Users\whhai\AppData\Roaming\Adobe\CEP\extensions\com.word_to_photoshop.panel
+[OK]   Repo marker written: C:\Users\whhai\AppData\Roaming\Adobe\CEP\extensions\com.word_to_photoshop.panel\host\repo_path.txt
+[INFO] Copying extension files to: C:\Program Files (x86)\Common Files\Adobe\CEP\extensions\com.word_to_photoshop.panel
+PS>TerminatingError(Copy-Item): "The running command stopped because the preference variable "ErrorActionPreference" or common parameter is set to Stop: Access to the path 'com.word_to_photoshop.panel' is denied."
+[WARN] Skipping path due to permission or IO error: C:\Program Files (x86)\Common Files\Adobe\CEP\extensions
+[WARN] Access to the path 'com.word_to_photoshop.panel' is denied.
+[INFO] Copying extension files to: C:\Program Files\Common Files\Adobe\CEP\extensions\com.word_to_photoshop.panel
+PS>TerminatingError(Copy-Item): "The running command stopped because the preference variable "ErrorActionPreference" or common parameter is set to Stop: Access to the path 'com.word_to_photoshop.panel' is denied."
+[WARN] Skipping path due to permission or IO error: C:\Program Files\Common Files\Adobe\CEP\extensions
+[WARN] Access to the path 'com.word_to_photoshop.panel' is denied.
+[OK]   User environment variable set: WORD_IMPORT_REPO_PATH=C:\Users\whhai\Documents\GitHub\word-to-photoshop
+[OK]   CSXS.8 PlayerDebugMode=1 has been set
+[OK]   CSXS.9 PlayerDebugMode=1 has been set
+[OK]   CSXS.10 PlayerDebugMode=1 has been set
+[OK]   CSXS.11 PlayerDebugMode=1 has been set
+[OK]   CSXS.12 PlayerDebugMode=1 has been set
+[OK]   CSXS.13 PlayerDebugMode=1 has been set
+[OK]   CSXS.14 PlayerDebugMode=1 has been set
+[OK]   CSXS.15 PlayerDebugMode=1 has been set
+[OK]   CSXS.16 PlayerDebugMode=1 has been set
+[OK]   CSXS.17 PlayerDebugMode=1 has been set
+[OK]   CSXS.18 PlayerDebugMode=1 has been set
+[OK]   CSXS.19 PlayerDebugMode=1 has been set
+[OK]   CSXS.20 PlayerDebugMode=1 has been set
+
+[OK]   CEP installation completed.
+Next: restart Photoshop, then open Window > Extensions (Legacy) > Word Import CEP
+**********************
+Windows PowerShell transcript end
+End time: 20260430073203
+**********************

@@ -1,26 +1,80 @@
 <!doctype html>
-<html>
+<html lang="zh-Hans">
   <head>
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <title>Word Import CEP</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>漫画汉化导入助手</title>
     <link rel="stylesheet" href="./client/style.css" />
   </head>
   <body>
-    <div class="wrap">
-      <h2>漫画汉化导入助手（CEP）</h2>
-      <p class="hint">CEP 面板负责入口与按钮；导入核心仍使用项目内 `import_panel.jsx` / `import_to_photoshop.jsx`。</p>
+    <div class="shell">
+      <header class="appHeader">
+        <div class="appTitleRow">
+          <span class="appMark" aria-hidden="true"></span>
+          <h1 class="appTitle">漫画汉化导入助手</h1>
+        </div>
+        <p class="appLead">
+          CEP 提供快捷入口；完整选项由 <kbd>导入面板</kbd> 与脚本核心处理。
+        </p>
+      </header>
 
-      <div class="card">
-        <button id="btnOpenPanel">打开完整导入面板（推荐）</button>
-        <button id="btnQuickImport">快速导入（一次性流程）</button>
-      </div>
+      <main class="wrap">
+        <section class="panelSection" aria-label="常用操作">
+          <div class="sectionHead">
+            <span class="sectionTitle">常用</span>
+          </div>
+          <button type="button" id="btnOpenPanel" class="btnPrimary btnWide">
+            打开完整导入面板
+          </button>
+          <p class="sectionHint">推荐：页码、当前页导入等完整流程</p>
+        </section>
 
-      <div class="card">
-        <button id="btnPing">检查 CEP / Photoshop 连接</button>
-      </div>
+        <section class="panelSection" aria-label="工作流程">
+          <div class="sectionHead">
+            <span class="sectionTitle">工作流程</span>
+          </div>
+          <button type="button" id="btnExportDocx" class="btnWide">
+            Word → jsxdata（需本机导出脚本）
+          </button>
+        </section>
 
-      <textarea id="logBox" readonly></textarea>
+        <section class="panelSection dangerZone" aria-label="危险操作">
+          <div class="sectionHead">
+            <span class="sectionTitle">危险区域</span>
+          </div>
+          <button type="button" id="btnClearDialogues" class="btnDanger btnWide">
+            清除本工具导入的对话文本
+          </button>
+          <p class="sectionHint">删除 PSD 中以「Word Import #」「Bubble #」前缀的导入文本图层</p>
+        </section>
+
+        <section class="panelSection" aria-label="调试">
+          <button type="button" id="btnPing" class="btnGhost btnWide">
+            检查 CEP 与 Photoshop 连接
+          </button>
+        </section>
+
+        <section class="card quotesCard panelSection">
+          <div class="quoteHeader">
+            <div>
+              <div class="sectionTitle-inline">逐条台词</div>
+              <div class="quoteSubtitle">拖到画布上松开即可投放气泡</div>
+            </div>
+            <button type="button" id="btnReloadQuotes" class="miniBtn">刷新</button>
+          </div>
+          <div class="quoteToolbar">
+            <label for="pageSelect">页码</label>
+            <select id="pageSelect"></select>
+          </div>
+          <div id="quoteList" class="quoteList"></div>
+        </section>
+
+        <footer class="logFooter">
+          <label for="logBox" class="logLabel">运行日志</label>
+          <textarea id="logBox" readonly rows="10"></textarea>
+        </footer>
+      </main>
     </div>
 
     <script src="./client/main.js"></script>

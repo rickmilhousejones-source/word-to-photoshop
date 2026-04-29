@@ -1,54 +1,308 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  background: #252525;
-  color: #f0f0f0;
-  font: 12px/1.4 "Microsoft YaHei", Arial, sans-serif;
+  min-height: 100%;
+  background: radial-gradient(1200px 800px at 10% -20%, #2d3542 0%, #1a1d24 42%, #12141a 100%);
+  color: #e8eaef;
+  font: 13px/1.5 "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.appHeader {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent);
+}
+
+.appTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.appMark {
+  width: 8px;
+  height: 24px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #5fb4ff, #2d89ef);
+  box-shadow: 0 0 12px rgba(47, 137, 239, 0.45);
+  flex-shrink: 0;
+}
+
+.appTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.appLead {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: rgba(232, 234, 239, 0.65);
+}
+
+.appLead kbd {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .wrap {
-  padding: 10px;
+  flex: 1;
+  padding: 12px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
 }
 
-h2 {
-  margin: 0 0 8px 0;
-  font-size: 16px;
+.panelSection {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(18, 20, 28, 0.65);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
 }
 
-.hint {
-  margin: 0 0 10px 0;
-  color: #bfbfbf;
-}
-
-.card {
-  border: 1px solid #4a4a4a;
-  border-radius: 6px;
-  padding: 8px;
+.sectionHead {
   margin-bottom: 10px;
-  display: grid;
-  gap: 8px;
+}
+
+.sectionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(232, 234, 239, 0.45);
+}
+
+.sectionTitle-inline {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f0f4f8;
+}
+
+.sectionHint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(232, 234, 239, 0.5);
+}
+
+.dangerZone {
+  border-color: rgba(239, 100, 100, 0.25);
+  background: rgba(40, 24, 24, 0.35);
 }
 
 button {
-  height: 30px;
-  border: 1px solid #666;
-  border-radius: 4px;
-  background: #3a3a3a;
-  color: #f5f5f5;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f0f4f8;
+  font: inherit;
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 button:hover {
-  background: #4a4a4a;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+.btnWide {
+  width: 100%;
+}
+
+.btnPrimary {
+  background: linear-gradient(180deg, #3988e8 0%, #2a6fc7 100%);
+  border-color: rgba(100, 180, 255, 0.5);
+  font-weight: 600;
+}
+
+.btnPrimary:hover {
+  background: linear-gradient(180deg, #4896f5 0%, #387fd4 100%);
+  box-shadow: 0 4px 16px rgba(42, 111, 199, 0.35);
+}
+
+.btnDanger {
+  border-color: rgba(255, 120, 120, 0.35);
+  background: rgba(180, 50, 50, 0.35);
+  color: #ffe8e8;
+}
+
+.btnDanger:hover {
+  background: rgba(210, 70, 70, 0.45);
+}
+
+.btnGhost {
+  background: transparent;
+  color: rgba(232, 234, 239, 0.75);
+  border-style: dashed;
+}
+
+.card.quotesCard {
+  padding-bottom: 10px;
+}
+
+.quoteHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.quoteSubtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(232, 234, 239, 0.45);
+}
+
+.quoteToolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.quoteToolbar label {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: rgba(232, 234, 239, 0.55);
+}
+
+#pageSelect {
+  flex: 1;
+  min-width: 120px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #e8eaef;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.miniBtn {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.quoteList {
+  max-height: 260px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px;
+  margin: -4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.quoteList::-webkit-scrollbar {
+  width: 6px;
+}
+
+.quoteList::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.quoteItem {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: grab;
+}
+
+.quoteItem:hover {
+  border-color: rgba(100, 180, 255, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.quoteItem:active {
+  cursor: grabbing;
+}
+
+.quoteItem.dragging {
+  opacity: 0.55;
+}
+
+.quoteMeta {
+  font-size: 11px;
+  color: rgba(232, 234, 239, 0.45);
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quoteText {
+  color: #f2f6fa;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.quoteEmpty {
+  color: rgba(232, 234, 239, 0.4);
+  font-size: 12px;
+  padding: 8px 4px;
+  text-align: center;
+}
+
+.logFooter {
+  margin-top: 4px;
+}
+
+.logLabel {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(232, 234, 239, 0.4);
 }
 
 #logBox {
   width: 100%;
-  min-height: 220px;
-  box-sizing: border-box;
-  border: 1px solid #4a4a4a;
-  border-radius: 6px;
-  background: #1b1b1b;
-  color: #cfcfcf;
-  padding: 8px;
+  min-height: 180px;
+  padding: 10px 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.4);
+  color: rgba(216, 220, 228, 0.95);
+  font: 11px/1.45 Consolas, "SF Mono", "Cascadia Code", monospace;
   resize: vertical;
+}
+
+#logBox:focus {
+  outline: 1px solid rgba(100, 180, 255, 0.35);
 }

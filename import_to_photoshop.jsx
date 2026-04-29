@@ -126,7 +126,8 @@ Settings are read from settings.json beside this script.
       fontFamilyNames: ["Microsoft YaHei", "微软雅黑", "Microsoft YaHei UI"],
       fontRegularCandidates: ["MicrosoftYaHei", "MicrosoftYaHeiUI", "MicrosoftYaHeiUI-Regular"],
       fontBoldCandidates: ["MicrosoftYaHei-Bold", "MicrosoftYaHeiUI-Bold"],
-      fontSizePt: 36,
+      fontSizePt: 26,
+      lineSpacingPt: 31,
       startX: 50,
       startY: 80,
       boxWidth: 900,
@@ -142,7 +143,8 @@ Settings are read from settings.json beside this script.
       useFauxBoldFallback: true,
       useFauxItalic: true,
       rememberLastDataFile: true,
-      lastDataFile: ""
+      lastDataFile: "",
+      textColorRgb: [34, 34, 34]
     };
 
     if (!f.exists) {
@@ -479,9 +481,11 @@ Settings are read from settings.json beside this script.
 
       try {
         applyTextWithStyleRanges(layer, item.fullText, item.styleRanges, cfg);
+        applyParagraphTypography(layer, cfg, { centered: false });
         importedCount++;
       } catch (e) {
         try { layer.textItem.contents = item.fullText; } catch (_) {}
+        try { applyParagraphTypography(layer, cfg, { centered: false }); } catch (_) {}
         errors.push({
           page: selectedPage,
           paragraph: item.paragraphIndex,
@@ -1020,6 +1024,53 @@ Settings are read from settings.json beside this script.
     return rough;
   }
 
+  function getLineSpacingPt(cfg) {
+    var v = cfg && cfg.lineSpacingPt != null ? cfg.lineSpacingPt : 31;
+    var n = Number(v);
+    return isNaN(n) ? 31 : n;
+  }
+
+  function clampByte(v) {
+    var n = Math.round(Number(v));
+    if (isNaN(n)) return 0;
+    if (n < 0) return 0;
+    if (n > 255) return 255;
+    return n;
+  }
+
+  function applyTextColorFromCfg(textLayer, cfg) {
+    if (!textLayer || !textLayer.textItem || !cfg || !cfg.textColorRgb) return;
+    var rgb = cfg.textColorRgb;
+    if (!(rgb instanceof Array) || rgb.length < 3) return;
+    try {
+      var sc = new SolidColor();
+      sc.rgb.red = clampByte(rgb[0]);
+      sc.rgb.green = clampByte(rgb[1]);
+      sc.rgb.blue = clampByte(rgb[2]);
+      textLayer.textItem.color = sc;
+    } catch (_) {}
+  }
+
+  function applyParagraphTypography(textLayer, cfg, opts) {
+    opts = opts || {};
+    var lead = getLineSpacingPt(cfg);
+    try {
+      textLayer.textItem.autoLeading = false;
+      textLayer.textItem.leading = UnitValue(lead, "pt");
+    } catch (_) {}
+    try {
+      if (opts.centered) {
+        textLayer.textItem.justification = Justification.CENTER;
+      } else {
+        textLayer.textItem.justification = Justification.LEFT;
+      }
+    } catch (_) {}
+    try {
+      textLayer.textItem.mojikumi = Mojikumi.NONE;
+    } catch (_) {}
+    applyTextColorFromCfg(textLayer, cfg);
+  }
+
   function applyTextWithStyleRanges(textLayer, fullText, styleRanges, cfg) {
     textLayer.textItem.contents = fullText;
     textLayer.textItem.size = cfg.fontSizePt;
@@ -1031,6 +1082,10 @@ Settings are read from settings.json beside this script.
         try { if (s.fontPostScriptName) textLayer.textItem.font = s.fontPostScriptName; } catch (_) {}
         try { if (typeof s.fauxBold !== "undefined") textLayer.textItem.fauxBold = !!s.fauxBold; } catch (_) {}
         try { if (typeof s.fauxItalic !== "undefined") textLayer.textItem.fauxItalic = !!s.fauxItalic; } catch (_) {}
+        try {
+          textLayer.textItem.autoLeading = false;
+          textLayer.textItem.leading = UnitValue(getLineSpacingPt(cfg), "pt");
+        } catch (_) {}
         return;
       }
     } catch (_) {}
@@ -1043,7 +1098,7 @@ Settings are read from settings.json beside this script.
     textDesc.putString(charIDToTypeID("Txt "), fullText);
 
     var baseStyle = new ActionDescriptor();
-    fillStyleDescriptor(baseStyle, styleRanges[0].style, cfg.fontSizePt);
+    fillStyleDescriptor(baseStyle, styleRanges[0].style, cfg);
     textDesc.putObject(stringIDToTypeID("textStyle"), stringIDToTypeID("textStyle"), baseStyle);
 
     var list = new ActionList();
@@ -1054,7 +1109,7 @@ Settings are read from settings.json beside this script.
       rangeDesc.putInteger(stringIDToTypeID("to"), r.to);
 
       var styleDesc = new ActionDescriptor();
-      fillStyleDescriptor(styleDesc, r.style, cfg.fontSizePt);
+      fillStyleDescriptor(styleDesc, r.style, cfg);
       rangeDesc.putObject(stringIDToTypeID("textStyle"), stringIDToTypeID("textStyle"), styleDesc);
       list.putObject(stringIDToTypeID("textStyleRange"), rangeDesc);
     }
@@ -1068,14 +1123,123 @@ Settings are read from settings.json beside this script.
     executeAction(charIDToTypeID("setd"), desc, DialogModes.NO);
   }
 
-  function fillStyleDescriptor(desc, style, fontSizePt) {
+  function fillStyleDescriptor(desc, style, cfg) {
+    var fontSizePt = cfg && cfg.fontSizePt != null ? Number(cfg.fontSizePt) : 26;
+    if (isNaN(fontSizePt)) fontSizePt = 26;
+    var leadPt = getLineSpacingPt(cfg);
     desc.putString(stringIDToTypeID("fontPostScriptName"), style.fontPostScriptName);
     desc.putBoolean(stringIDToTypeID("fauxBold"), !!style.fauxBold);
     desc.putBoolean(stringIDToTypeID("fauxItalic"), !!style.fauxItalic);
     desc.putBoolean(stringIDToTypeID("syntheticItalic"), !!style.syntheticItalic);
     desc.putUnitDouble(stringIDToTypeID("size"), charIDToTypeID("#Pnt"), fontSizePt);
     desc.putUnitDouble(stringIDToTypeID("impliedFontSize"), charIDToTypeID("#Pnt"), fontSizePt);
-    desc.putBoolean(stringIDToTypeID("autoLeading"), true);
+    desc.putBoolean(stringIDToTypeID("autoLeading"), false);
+    desc.putUnitDouble(stringIDToTypeID("leading"), charIDToTypeID("#Pnt"), leadPt);
+  }
+
+  /**
+   * CEP drag-drop: insert one paragraph with same font/style pipeline as bulk import.
+   * payload.fracX / fracY: 0..1 within layout bounds (single artboard / document).
+   */
+  function insertBubbleParagraphCEP(doc, payload) {
+    if (!doc) throw new Error("没有打开的文档");
+    var pageNorm = normalizePageNumber(String(payload.page || "001"));
+    var paraIx = payload.paragraph != null ? payload.paragraph : 0;
+
+    var scriptFile = new File($.fileName);
+    var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
+    var cfg = loadSettings(settingsFile);
+
+    var fracX =
+      typeof payload.fracX === "number" && !isNaN(payload.fracX) ? Math.max(0, Math.min(1, payload.fracX)) : 0.12;
+    var fracY =
+      typeof payload.fracY === "number" && !isNaN(payload.fracY) ? Math.max(0, Math.min(1, payload.fracY)) : 0.12;
+
+    var para = { segments: [] };
+    if (payload.segments && payload.segments.length) {
+      for (var si = 0; si < payload.segments.length; si++) {
+        var se = payload.segments[si] || {};
+        para.segments.push({
+          text: String(se.text != null ? se.text : ""),
+          bold: !!se.bold,
+          italic: !!se.italic
+        });
+      }
+    } else if (payload.text != null && String(payload.text).length) {
+      para.segments.push({ text: String(payload.text), bold: false, italic: false });
+    } else {
+      throw new Error("拖拽内容为空");
+    }
+
+    var out = {};
+
+    runWithPixelUnits(function () {
+      var bounds = getLayoutBounds(doc, cfg);
+      var bw = Math.max(160, Math.min(560, Number(cfg.boxWidth || 480) * 0.45));
+      var bh = Math.max(72, Math.min(320, Number(cfg.boxHeight || 180) * 0.55));
+
+      var inset = 8;
+      var innerL = bounds.left + inset;
+      var innerR = bounds.left + bounds.width - inset;
+      var innerT = bounds.top + inset;
+      var innerB = bounds.top + bounds.height - inset;
+      var spanW = Math.max(1, innerR - innerL);
+      var spanH = Math.max(1, innerB - innerT);
+      var cx = innerL + fracX * spanW;
+      var cy = innerT + fracY * spanH;
+      var x = cx - bw / 2;
+      var y = cy - bh / 2;
+      var minX = bounds.left + inset;
+      var maxX = bounds.left + bounds.width - bw - inset;
+      var minY = bounds.top + inset;
+      var maxY = bounds.top + bounds.height - bh - inset;
+      if (!isNaN(minX) && !isNaN(maxX) && minX <= maxX) {
+        if (x < minX) x = minX;
+        if (x > maxX) x = maxX;
+      }
+      if (!isNaN(minY) && !isNaN(maxY) && minY <= maxY) {
+        if (y < minY) y = minY;
+        if (y > maxY) y = maxY;
+      }
+
+      var probe = createTextLayer(doc, cfg, pageNorm, paraIx);
+      var font = resolveFonts(cfg, probe);
+      probe.remove();
+
+      var layer = doc.artLayers.add();
+      layer.kind = LayerKind.TEXT;
+      layer.name = "Bubble #" + pageNorm + "-" + paraIx;
+      layer.textItem.kind = TextType.PARAGRAPHTEXT;
+      layer.textItem.position = [x, y];
+      layer.textItem.size = cfg.fontSizePt;
+      try {
+        layer.textItem.width = UnitValue(bw, "px");
+      } catch (_) {}
+      try {
+        layer.textItem.height = UnitValue(bh, "px");
+      } catch (_) {}
+      try {
+        layer.textItem.contents = " ";
+      } catch (_) {}
+
+      var model = buildParagraphTextAndRanges(para, font, cfg);
+      if (!model.fullText || model.fullText.length === 0) {
+        layer.remove();
+        throw new Error("段落无法生成文本内容");
+      }
+      applyTextWithStyleRanges(layer, model.fullText, model.styleRanges, cfg);
+      applyParagraphTypography(layer, cfg, { centered: true });
+
+      out.layerName = layer.name;
+      out.x = x;
+      out.y = y;
+      out.boxWidth = bw;
+      out.boxHeight = bh;
+      out.boundsLeft = bounds.left;
+      out.boundsTop = bounds.top;
+    });
+
+    return out;
   }
 
   $.global.WORD_IMPORT_API = {
@@ -1085,7 +1249,8 @@ Settings are read from settings.json beside this script.
     saveSettingsToDisk: saveSettingsToDisk,
     performImport: performImport,
     normalizePageNumber: normalizePageNumber,
-    formatImportSummary: formatImportSummary
+    formatImportSummary: formatImportSummary,
+    insertBubbleParagraphCEP: insertBubbleParagraphCEP
   };
 
   if (!$.global.WORD_IMPORT_PANEL_MODE) {

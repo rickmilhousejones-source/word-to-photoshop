@@ -8,6 +8,27 @@
     return;
   }
 
+  // Second click closes the palette. Cannot use a blocking loop below or this block never runs again.
+  var existingPanelWin = $.global.WORD_IMPORT_PANEL_WINDOW;
+  if (existingPanelWin) {
+    var wasOpen = false;
+    try {
+      wasOpen = existingPanelWin.visible === true;
+    } catch (_) {
+      $.global.WORD_IMPORT_PANEL_WINDOW = null;
+      wasOpen = false;
+    }
+    try {
+      if (wasOpen) {
+        existingPanelWin.close();
+      }
+    } catch (_) {}
+    $.global.WORD_IMPORT_PANEL_WINDOW = null;
+    if (wasOpen) {
+      return;
+    }
+  }
+
   $.global.WORD_IMPORT_PANEL_MODE = true;
   var coreFile = new File(File($.fileName).parent.fsName + "/import_to_photoshop.jsx");
   if (!coreFile.exists) {
@@ -58,38 +79,34 @@
   pageList.preferredSize.height = 150;
   var pageInfo = previewPanel.add("statictext", undefined, "页信息: -");
 
-  var cfgPanel = w.add("panel", undefined, "布局参数");
+  var cfgPanel = w.add("panel", undefined, "全局排版与颜色");
   cfgPanel.orientation = "column";
   cfgPanel.alignChildren = "fill";
-  var row1 = cfgPanel.add("group");
-  row1.add("statictext", undefined, "字号");
-  var inputFontSize = row1.add("edittext", undefined, "");
-  inputFontSize.characters = 6;
-  row1.add("statictext", undefined, "起始X");
-  var inputStartX = row1.add("edittext", undefined, "");
-  inputStartX.characters = 6;
-  row1.add("statictext", undefined, "起始Y");
-  var inputStartY = row1.add("edittext", undefined, "");
-  inputStartY.characters = 6;
+  var rowFont = cfgPanel.add("group");
+  rowFont.add("statictext", undefined, "全局字号(pt)");
+  var inputFontSize = rowFont.add("edittext", undefined, "");
+  inputFontSize.characters = 5;
+  rowFont.add("statictext", undefined, "行间距(pt)");
+  var inputLineSpacing = rowFont.add("edittext", undefined, "");
+  inputLineSpacing.characters = 5;
 
-  var row2 = cfgPanel.add("group");
-  row2.add("statictext", undefined, "文本框宽");
-  var inputBoxWidth = row2.add("edittext", undefined, "");
-  inputBoxWidth.characters = 6;
-  row2.add("statictext", undefined, "文本框高");
-  var inputBoxHeight = row2.add("edittext", undefined, "");
-  inputBoxHeight.characters = 6;
-  row2.add("statictext", undefined, "垂直间距");
-  var inputVerticalGap = row2.add("edittext", undefined, "");
-  inputVerticalGap.characters = 6;
+  var rowColor = cfgPanel.add("group");
+  rowColor.add("statictext", undefined, "字体颜色");
+  var inputColorHex = rowColor.add("edittext", undefined, "");
+  inputColorHex.characters = 10;
+  inputColorHex.helpTip = "十六进制，如 #222222";
 
-  var row3 = cfgPanel.add("group");
-  row3.add("statictext", undefined, "水平间距");
-  var inputHorizontalGap = row3.add("edittext", undefined, "");
-  inputHorizontalGap.characters = 6;
-  var chkAutoGap = row3.add("checkbox", undefined, "自动列间距");
-  var chkWrap = row3.add("checkbox", undefined, "自动换列");
-  var btnSaveDefaults = row3.add("button", undefined, "保存为默认");
+  cfgPanel.add(
+    "statictext",
+    undefined,
+    "（框宽 / 起始坐标 / 列间距等请到 settings.json 调整；此处仅最常改几项）",
+    { multiline: false }
+  );
+
+  var rowFontImport = cfgPanel.add("group");
+  var btnPickFontFile = rowFontImport.add("button", undefined, "导入字体文件 …");
+  btnPickFontFile.helpTip = "预留入口，稍后支持";
+  var btnSaveDefaults = rowFontImport.add("button", undefined, "保存为默认");
 
   var actionPanel = w.add("panel", undefined, "导入操作");
   actionPanel.orientation = "row";
@@ -115,36 +132,49 @@
     logText.text = logText.text ? (logText.text + "\n" + line) : line;
   }
 
-  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  function pad2(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
 
   function parseNum(value, fallback) {
     var n = parseFloat(value);
     return isNaN(n) ? fallback : n;
   }
 
+  function rgbToHex(rgb) {
+    if (!rgb || rgb.length < 3) return "#222222";
+    function h(n0) {
+      var n = Math.max(0, Math.min(255, Math.round(Number(n0))));
+      var s = n.toString(16);
+      return s.length === 1 ? "0" + s : s;
+    }
+    return "#" + h(rgb[0]) + h(rgb[1]) + h(rgb[2]);
+  }
+
+  function parseHexColor(str, fb) {
+    var fallback = fb && fb.length >= 3 ? fb : [34, 34, 34];
+    var s = String(str || "").replace(/^\s*#?\s*/, "").replace(/\s*$/,"");
+    if (/^[0-9a-fA-F]{6}$/.test(s)) {
+      return [
+        parseInt(s.substring(0, 2), 16),
+        parseInt(s.substring(2, 4), 16),
+        parseInt(s.substring(4, 6), 16)
+      ];
+    }
+    return [fallback[0], fallback[1], fallback[2]];
+  }
+
   function readCfgInputs() {
     var cfg = state.cfg;
-    cfg.fontSizePt = parseNum(inputFontSize.text, cfg.fontSizePt);
-    cfg.startX = parseNum(inputStartX.text, cfg.startX);
-    cfg.startY = parseNum(inputStartY.text, cfg.startY);
-    cfg.boxWidth = parseNum(inputBoxWidth.text, cfg.boxWidth);
-    cfg.boxHeight = parseNum(inputBoxHeight.text, cfg.boxHeight);
-    cfg.verticalGap = parseNum(inputVerticalGap.text, cfg.verticalGap);
-    cfg.horizontalGap = parseNum(inputHorizontalGap.text, cfg.horizontalGap);
-    cfg.autoHorizontalGap = !!chkAutoGap.value;
-    cfg.wrapToNextColumn = !!chkWrap.value;
+    cfg.fontSizePt = parseNum(inputFontSize.text, cfg.fontSizePt != null ? cfg.fontSizePt : 26);
+    cfg.lineSpacingPt = parseNum(inputLineSpacing.text, cfg.lineSpacingPt != null ? cfg.lineSpacingPt : 31);
+    cfg.textColorRgb = parseHexColor(inputColorHex.text, cfg.textColorRgb || [34, 34, 34]);
   }
 
   function writeCfgInputs(cfg) {
-    inputFontSize.text = String(cfg.fontSizePt);
-    inputStartX.text = String(cfg.startX);
-    inputStartY.text = String(cfg.startY);
-    inputBoxWidth.text = String(cfg.boxWidth);
-    inputBoxHeight.text = String(cfg.boxHeight);
-    inputVerticalGap.text = String(cfg.verticalGap);
-    inputHorizontalGap.text = String(cfg.horizontalGap);
-    chkAutoGap.value = !!cfg.autoHorizontalGap;
-    chkWrap.value = !!cfg.wrapToNextColumn;
+    inputFontSize.text = String(cfg.fontSizePt != null ? cfg.fontSizePt : 26);
+    inputLineSpacing.text = String(cfg.lineSpacingPt != null ? cfg.lineSpacingPt : 31);
+    inputColorHex.text = rgbToHex(cfg.textColorRgb || [34, 34, 34]);
   }
 
   function refreshPages() {
@@ -247,6 +277,11 @@
     selectDataFileManually();
   };
 
+  btnPickFontFile.onClick = function () {
+    alert("导入自定义字体文件：功能规划中，将在后续版本提供。");
+    log("[提示] 字体文件导入暂未实现。");
+  };
+
   pageList.onChange = function () { updatePageInfo(); };
 
   btnImportCurrent.onClick = function () {
@@ -285,14 +320,19 @@
     }
   };
 
-  var keepAlive = true;
   w.onClose = function () {
-    keepAlive = false;
+    try {
+      $.global.WORD_IMPORT_PANEL_WINDOW = null;
+    } catch (_) {}
     return true;
   };
   btnClosePanel.onClick = function () {
-    keepAlive = false;
-    try { w.close(); } catch (_) {}
+    try {
+      $.global.WORD_IMPORT_PANEL_WINDOW = null;
+    } catch (_) {}
+    try {
+      w.close();
+    } catch (_) {}
   };
 
   btnClearLog.onClick = function () { logText.text = ""; };
@@ -312,12 +352,8 @@
   w.center();
   $.global.WORD_IMPORT_PANEL_WINDOW = w;
   w.show();
-  // Keep script context alive for Photoshop builds where palette can be GC'd
-  // after script exit even with targetengine.
-  while (keepAlive && w.visible) {
-    try { app.refresh(); } catch (_) {}
-    $.sleep(120);
-  }
+  // Do NOT spin here — a blocking loop would prevent future evalScript (e.g. CEP second click/toggle).
+  // #targetengine "word_import_panel_engine" retains globals; palette stays open until explicit close().
   } catch (e) {
     alert("面板初始化失败: " + e.message + "\n(行号: " + (e.line || "?") + ")");
   }
