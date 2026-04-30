@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "coordinateSpace": "documentPixels",
+  "generatedAt": "2026-04-30T14:01:17.006759+00:00",
+  "generator": {
+    "name": "tools/extract_bubbles.py",
+    "opencv": "4.13.0",
+    "params": {
+      "minArea": 1200,
+      "maxAreaRatio": 0.92,
+      "minWidth": 40,
+      "minHeight": 28,
+      "maxRatio": 14.0,
+      "morphCloseKernel": 7
+    }
+  },
+  "pages": {
+    "1544": [
+      {
+        "left": 0,
+        "top": 0,
+        "right": 825,
+        "bottom": 249,
+        "centerX": 412.5,
+        "centerY": 124.5,
+        "area": 205425
+      }
+    ],
+    "000": [],
+    "956": [
+      {
+        "left": 0,
+        "top": 28,
+        "right": 337,
+        "bottom": 206,
+        "centerX": 168.5,
+        "centerY": 117.0,
+        "area": 59986
+      }
+    ],
+    "006": [],
+    "034": [],
+    "004": [],
+    "003": [],
+    "651": [],
+    "007": [],
+    "6214": [],
+    "012": [
+      {
+        "left": 19,
+        "top": 41,
+        "right": 632,
+        "bottom": 994,
+        "centerX": 325.5,
+        "centerY": 517.5,
+        "area": 584189
+      }
+    ]
+  },
+  "files": [
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-0ccba36c-a5e3-41cb-bb02-bef5e1af1544.png",
+      "page": "1544",
+      "count": 1
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-130eccef-7e42-4eff-98c3-39e27ba51880.png",
+      "page": "000",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-151cf7df-e20e-4afb-9258-fcdd0988c956.png",
+      "page": "956",
+      "count": 1
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-1f5d66b1-a2d9-4dbd-8d5a-342b471199b0.png",
+      "page": "000",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-226737c8-e31b-4624-be6e-e67f78b8bee6.png",
+      "page": "006",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-6ad57c60-6b6f-4532-8e28-c5f07482f34b.png",
+      "page": "034",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-7a131e15-9e92-4d8b-9bd3-2a5e05eb04da.png",
+      "page": "004",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-8a68e29e-226b-4977-b55a-59e8864c93d3.png",
+      "page": "003",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-d2910198-9a33-444d-acec-10265303c651.png",
+      "page": "651",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-d51da254-ae5b-413f-9a3e-486d53f7bbcd.png",
+      "page": "007",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_image-e18577e7-16f1-484a-b4fa-4f65aa8d6214.png",
+      "page": "6214",
+      "count": 0
+    },
+    {
+      "file": "c__Users_whhai_AppData_Roaming_Cursor_User_workspaceStorage_7b55ce440d9517bc4d49d03eb0d243e0_images_The_Nice_House_by_the_Sea_006__2025__-_0012_mask-fcd174f9-5b6f-4698-9ddf-3840b1aecfb0.png",
+      "page": "012",
+      "count": 1
+    }
+  ]
+}

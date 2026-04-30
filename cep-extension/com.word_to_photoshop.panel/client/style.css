@@ -66,11 +66,12 @@ body {
 
 .wrap {
   flex: 1;
+  min-height: 0;
   padding: 12px 14px 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: 560px;
+  max-width: 360px;
 }
 
 .panelSection {
@@ -164,6 +165,10 @@ button:active {
 }
 
 .card.quotesCard {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 240px;
   padding-bottom: 10px;
 }
 
@@ -184,6 +189,7 @@ button:active {
 .quoteToolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 10px;
 }
@@ -214,7 +220,8 @@ button:active {
 }
 
 .quoteList {
-  max-height: 260px;
+  flex: 1;
+  min-height: 140px;
   overflow: auto;
   display: flex;
   flex-direction: column;

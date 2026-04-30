@@ -102,13 +102,13 @@ CEP 面板目录：
 
 一键安装（给测试用户，双击即可）：
 
-1. 双击 `install_cep.cmd`
+1. 双击 `安装脚本.cmd`
 2. 重启 Photoshop
 3. 打开 `窗口 > 扩展(旧版) > Word Import CEP`
 
 一键卸载：
 
-1. 双击 `uninstall_cep.cmd`
+1. 双击 `卸载脚本.cmd`
 2. 重启 Photoshop
 
 手动安装（开发侧）：
@@ -165,6 +165,40 @@ UXP 面板能力：
 1. **脚本提示找不到页码**：检查 Word 里是否每页前都有单独一段 `#001` 这种页码标记（`#1/#01/#001` 都行）。
 2. **导入很慢**：优先用 `-Minify` 导出；导入端可把 `refreshEveryN` 调大（例如 50）减少 UI 刷新频率。
 3. **字体不对**：确保系统已安装微软雅黑；可在 `settings.json` 里调整 `fontFamilyNames` / `fontRegularCandidates` / `fontBoldCandidates`。
+
+### 预识别对白框（Python + mask）
+
+当你已经有 AI 预处理得到的黑白 mask（白色区域=对白区域）时，可先离线生成 `bubble_boxes.json`，拖拽时会优先使用该文件中的候选框，提升自动命中稳定性。
+
+1. 安装依赖（只需一次）：
+
+```powershell
+py -m pip install opencv-python numpy
+```
+
+2. 生成坐标文件：
+
+```powershell
+py .\tools\extract_bubbles.py --mask-dir ".\tmp\masks" --output ".\tmp\bubble_boxes.json"
+```
+
+3. 把 `bubble_boxes.json` 放到 `.jsxdata` 同目录（或 PSD 同目录）。
+   - 若数据文件是 `chapter_01.jsxdata`，也支持同目录放 `chapter_01.bubbles.json`（优先级更高）。
+4. 重启/重开 CEP 面板后拖拽台词，日志会显示 `来源: precomputed`。
+
+`bubble_boxes.json` 格式（核心字段）：
+
+```json
+{
+  "version": 1,
+  "coordinateSpace": "documentPixels",
+  "pages": {
+    "001": [
+      { "left": 100, "top": 200, "right": 380, "bottom": 460, "centerX": 240, "centerY": 330, "area": 72800 }
+    ]
+  }
+}
+```
 
 ### 五、日常使用建议
 

@@ -35,8 +35,14 @@
             <span class="sectionTitle">工作流程</span>
           </div>
           <button type="button" id="btnExportDocx" class="btnWide">
-            Word → jsxdata（需本机导出脚本）
+            将翻译稿（docx.)转换为导入数据
           </button>
+          <div class="quoteToolbar" style="margin-top:8px">
+            <button type="button" id="btnGenBubbleBoxes" class="miniBtn">从 mask 生成预识别框</button>
+            <button type="button" id="btnBindBubbleBoxes" class="miniBtn">绑定 bubble_boxes.json</button>
+            <button type="button" id="btnClearBubbleBoxes" class="miniBtn">清除 bubble_boxes 绑定</button>
+          </div>
+          <p class="sectionHint">可一键从 mask 目录生成；拖拽会自动检查 .jsxdata/PSD 同目录的预识别框。</p>
         </section>
 
         <section class="panelSection dangerZone" aria-label="危险操作">
@@ -53,13 +59,23 @@
           <button type="button" id="btnPing" class="btnGhost btnWide">
             检查 CEP 与 Photoshop 连接
           </button>
+          <div class="quoteToolbar" style="margin-top:8px">
+            <button type="button" id="btnCalibPoint1" class="miniBtn">记录基准点1</button>
+            <button type="button" id="btnCalibPoint2" class="miniBtn">记录基准点2并完成</button>
+            <button type="button" id="btnCalibReset" class="miniBtn">清除校准</button>
+          </div>
+          <div class="quoteToolbar" style="margin-top:8px">
+            <button type="button" id="btnLockSelRect" class="miniBtn">锁定当前小选区为目标框</button>
+            <button type="button" id="btnClearSelRect" class="miniBtn">清除锁定目标框</button>
+            <button type="button" id="btnDiagSel" class="miniBtn">诊断当前选区</button>
+          </div>
         </section>
 
         <section class="card quotesCard panelSection">
           <div class="quoteHeader">
             <div>
               <div class="sectionTitle-inline">逐条台词</div>
-              <div class="quoteSubtitle">拖到画布上松开即可投放气泡</div>
+              <div class="quoteSubtitle">当前默认：优先按常驻鼠标助手投放；失败时回退到 PS 选区中心，再回退到近似拖拽位置</div>
             </div>
             <button type="button" id="btnReloadQuotes" class="miniBtn">刷新</button>
           </div>

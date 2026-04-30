@@ -142,6 +142,13 @@ Settings are read from settings.json beside this script.
       wrapToNextColumn: true,
       useFauxBoldFallback: true,
       useFauxItalic: true,
+      bubblePaddingPx: 18,
+      bubbleDetectMinArea: 18000,
+      bubbleDetectMaxAreaRatio: 0.92,
+      bubbleSnapMaxDistance: 720,
+      bubbleUsePrecomputed: true,
+      bubblePrecomputedFileName: "bubble_boxes.json",
+      bubblePrecomputedPerDataFile: true,
       rememberLastDataFile: true,
       lastDataFile: "",
       textColorRgb: [34, 34, 34]
@@ -955,6 +962,235 @@ Settings are read from settings.json beside this script.
     return String(a).toLowerCase().indexOf(String(b).toLowerCase()) >= 0;
   }
 
+  function getUnitPx(v) {
+    try {
+      if (v == null) return NaN;
+      if (v.as) return Number(v.as("px"));
+      return Number(v);
+    } catch (_) {
+      return NaN;
+    }
+  }
+
+  function rectIntersects(a, b) {
+    if (!a || !b) return false;
+    return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+  }
+
+  function clamp(v, minV, maxV) {
+    if (v < minV) return minV;
+    if (v > maxV) return maxV;
+    return v;
+  }
+
+  function layerBoundsToRect(layer) {
+    try {
+      if (!layer || !layer.bounds || layer.bounds.length < 4) return null;
+      var l = getUnitPx(layer.bounds[0]);
+      var t = getUnitPx(layer.bounds[1]);
+      var r = getUnitPx(layer.bounds[2]);
+      var b = getUnitPx(layer.bounds[3]);
+      if (!isFinite(l) || !isFinite(t) || !isFinite(r) || !isFinite(b)) return null;
+      if (r <= l || b <= t) return null;
+      return { left: l, top: t, right: r, bottom: b };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function collectBubbleCandidatesFromContainer(container, scanRect, out, cfg) {
+    if (!container || !container.layers) return;
+    var docArea = Math.max(1, (scanRect.right - scanRect.left) * (scanRect.bottom - scanRect.top));
+    var minArea = Number(cfg && cfg.bubbleDetectMinArea != null ? cfg.bubbleDetectMinArea : 18000);
+    if (!isFinite(minArea) || minArea < 1000) minArea = 1000;
+    var maxAreaRatio = Number(cfg && cfg.bubbleDetectMaxAreaRatio != null ? cfg.bubbleDetectMaxAreaRatio : 0.92);
+    if (!isFinite(maxAreaRatio) || maxAreaRatio <= 0) maxAreaRatio = 0.92;
+    var maxArea = docArea * maxAreaRatio;
+    for (var i = 0; i < container.layers.length; i++) {
+      var layer = container.layers[i];
+      if (!layer || !layer.visible) continue;
+      if (layer.typename === "LayerSet") {
+        collectBubbleCandidatesFromContainer(layer, scanRect, out, cfg);
+        continue;
+      }
+      if (layer.typename !== "ArtLayer") continue;
+      if (layer.kind === LayerKind.TEXT) continue;
+      var rect = layerBoundsToRect(layer);
+      if (!rect || !rectIntersects(rect, scanRect)) continue;
+      var w = rect.right - rect.left;
+      var h = rect.bottom - rect.top;
+      var area = w * h;
+      if (area < minArea || area > maxArea) continue;
+      if (w < 80 || h < 40) continue;
+      var ratio = w > h ? (w / h) : (h / w);
+      if (ratio > 10.0) continue;
+      out.push({
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        centerX: (rect.left + rect.right) / 2,
+        centerY: (rect.top + rect.bottom) / 2,
+        area: area,
+        layerName: String(layer.name || "")
+      });
+    }
+  }
+
+  function detectBubbleCandidates(doc, cfg) {
+    var bounds = getLayoutBounds(doc, cfg);
+    var scanRect = {
+      left: bounds.left,
+      top: bounds.top,
+      right: bounds.left + bounds.width,
+      bottom: bounds.top + bounds.height
+    };
+    var list = [];
+    collectBubbleCandidatesFromContainer(doc, scanRect, list, cfg);
+    return list;
+  }
+
+  function pickNearestBubble(candidates, hintX, hintY, cfg) {
+    if (!candidates || !candidates.length) return null;
+    if (candidates.length === 1) {
+      return { idx: 0, d2: 0, candidate: candidates[0] };
+    }
+    if (!isFinite(hintX) || !isFinite(hintY)) return null;
+    var maxDist = Number(cfg && cfg.bubbleSnapMaxDistance != null ? cfg.bubbleSnapMaxDistance : 720);
+    if (!isFinite(maxDist) || maxDist <= 0) maxDist = 720;
+    var maxDist2 = maxDist * maxDist;
+    var bestContaining = null;
+    var best = null;
+    for (var i = 0; i < candidates.length; i++) {
+      var c = candidates[i];
+      var inside = hintX >= c.left && hintX <= c.right && hintY >= c.top && hintY <= c.bottom;
+      if (inside) {
+        if (!bestContaining || c.area < bestContaining.candidate.area) {
+          bestContaining = { idx: i, d2: 0, candidate: c };
+        }
+        continue;
+      }
+      var dx = c.centerX - hintX;
+      var dy = c.centerY - hintY;
+      var d2 = dx * dx + dy * dy;
+      if (d2 > maxDist2) continue;
+      if (!best || d2 < best.d2) best = { idx: i, d2: d2, candidate: c };
+    }
+    return bestContaining || best;
+  }
+
+  function normalizeSelectionRect(selRect) {
+    if (!selRect) return null;
+    var l = Number(selRect.left), t = Number(selRect.top), r = Number(selRect.right), b = Number(selRect.bottom);
+    if (!isFinite(l) || !isFinite(t) || !isFinite(r) || !isFinite(b)) return null;
+    if (r <= l || b <= t) return null;
+    return {
+      left: l,
+      top: t,
+      right: r,
+      bottom: b,
+      centerX: (l + r) / 2,
+      centerY: (t + b) / 2,
+      area: (r - l) * (b - t),
+      layerName: "__selectionRect__"
+    };
+  }
+
+  function normalizePrecomputedBubbleRect(raw, idx) {
+    if (!raw) return null;
+    var l = Number(raw.left), t = Number(raw.top), r = Number(raw.right), b = Number(raw.bottom);
+    if (!isFinite(l) || !isFinite(t) || !isFinite(r) || !isFinite(b)) return null;
+    if (r <= l || b <= t) return null;
+    return {
+      left: l,
+      top: t,
+      right: r,
+      bottom: b,
+      centerX: (l + r) / 2,
+      centerY: (t + b) / 2,
+      area: (r - l) * (b - t),
+      layerName: "__precomputed__" + idx
+    };
+  }
+
+  function parseJSONLoose(raw) {
+    if (!raw) return null;
+    try {
+      if (typeof JSON !== "undefined" && JSON && JSON.parse) return JSON.parse(raw);
+    } catch (_) {}
+    try {
+      return eval("(" + raw + ")");
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function buildPrecomputedBubbleFileCandidates(doc, cfg) {
+    var out = [];
+    var fileName = String((cfg && cfg.bubblePrecomputedFileName) ? cfg.bubblePrecomputedFileName : "bubble_boxes.json");
+    var autoData = tryAutoPickDataFile(doc, cfg);
+    try {
+      if (autoData && autoData.exists && autoData.parent) {
+        if (cfg && cfg.bubblePrecomputedPerDataFile) {
+          var dataBase = String(autoData.name || "").replace(/\.[^\.]+$/, "");
+          out.push(new File(autoData.parent.fsName + "/" + dataBase + ".bubbles.json"));
+        }
+        out.push(new File(autoData.parent.fsName + "/" + fileName));
+      }
+    } catch (_) {}
+    try {
+      if (doc && doc.fullName && doc.fullName.parent) {
+        out.push(new File(doc.fullName.parent.fsName + "/" + fileName));
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  function loadPrecomputedBubblesForPage(doc, cfg, pageNorm) {
+    if (!cfg || cfg.bubbleUsePrecomputed === false) {
+      return { candidates: [], source: "", loaded: false, status: "disabled", tried: [] };
+    }
+    var files = buildPrecomputedBubbleFileCandidates(doc, cfg);
+    if (!files || !files.length) return { candidates: [], source: "", loaded: false, status: "noCandidatePath", tried: [] };
+    var tried = [];
+    var sawExistingFile = false;
+    var sawPageButEmpty = false;
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      try {
+        if (!f) continue;
+        tried.push(String(f.fsName || f.fullName || f));
+        if (!f.exists) continue;
+        sawExistingFile = true;
+        var parsed = parseJSONLoose(readTextFile(f));
+        if (!parsed || !parsed.pages) continue;
+        var pageRows = parsed.pages[String(pageNorm)] || parsed.pages[Number(pageNorm)] || null;
+        if (!pageRows || !pageRows.length) {
+          if (pageRows && pageRows.length === 0) sawPageButEmpty = true;
+          continue;
+        }
+        var out = [];
+        for (var j = 0; j < pageRows.length; j++) {
+          var n = normalizePrecomputedBubbleRect(pageRows[j], j);
+          if (n) out.push(n);
+        }
+        if (out.length) {
+          return {
+            candidates: out,
+            source: String(f.fsName || f.fullName || f),
+            loaded: true,
+            status: "loaded",
+            tried: tried
+          };
+        }
+      } catch (_) {}
+    }
+    var status = "notFound";
+    if (sawExistingFile && sawPageButEmpty) status = "pageEmpty";
+    else if (sawExistingFile) status = "pageMissing";
+    return { candidates: [], source: "", loaded: false, status: status, tried: tried };
+  }
+
   function buildParagraphTextAndRanges(para, font, cfg) {
     var full = "";
     var ranges = [];
@@ -1051,6 +1287,50 @@ Settings are read from settings.json beside this script.
     } catch (_) {}
   }
 
+  function forceParagraphLeadingByAM(textLayer, cfg, opts) {
+    if (!textLayer) return;
+    opts = opts || {};
+    var leadPt = getLineSpacingPt(cfg);
+    try {
+      var layerRef = new ActionReference();
+      layerRef.putIdentifier(charIDToTypeID("Lyr "), textLayer.id);
+      var layerDesc = executeActionGet(layerRef);
+      var textDesc = layerDesc.getObjectValue(stringIDToTypeID("textKey"));
+      var currentText = "";
+      try {
+        currentText = textDesc.getString(charIDToTypeID("Txt "));
+      } catch (_) {
+        currentText = "";
+      }
+      var textLen = currentText ? String(currentText).length : 1;
+      if (textLen < 1) textLen = 1;
+
+      var paraStyle = new ActionDescriptor();
+      paraStyle.putBoolean(stringIDToTypeID("autoLeading"), false);
+      paraStyle.putUnitDouble(stringIDToTypeID("leading"), charIDToTypeID("#Pnt"), leadPt);
+      try {
+        var alignEnum = opts.centered ? stringIDToTypeID("center") : stringIDToTypeID("left");
+        paraStyle.putEnumerated(stringIDToTypeID("align"), stringIDToTypeID("alignmentType"), alignEnum);
+      } catch (_) {}
+
+      var paraRange = new ActionDescriptor();
+      paraRange.putInteger(stringIDToTypeID("from"), 0);
+      paraRange.putInteger(stringIDToTypeID("to"), textLen);
+      paraRange.putObject(stringIDToTypeID("paragraphStyle"), stringIDToTypeID("paragraphStyle"), paraStyle);
+
+      var paraList = new ActionList();
+      paraList.putObject(stringIDToTypeID("paragraphStyleRange"), paraRange);
+      textDesc.putList(stringIDToTypeID("paragraphStyleRange"), paraList);
+
+      var setDesc = new ActionDescriptor();
+      var setRef = new ActionReference();
+      setRef.putIdentifier(charIDToTypeID("Lyr "), textLayer.id);
+      setDesc.putReference(charIDToTypeID("null"), setRef);
+      setDesc.putObject(charIDToTypeID("T   "), stringIDToTypeID("textLayer"), textDesc);
+      executeAction(charIDToTypeID("setd"), setDesc, DialogModes.NO);
+    } catch (_) {}
+  }
+
   function applyParagraphTypography(textLayer, cfg, opts) {
     opts = opts || {};
     var lead = getLineSpacingPt(cfg);
@@ -1068,6 +1348,8 @@ Settings are read from settings.json beside this script.
     try {
       textLayer.textItem.mojikumi = Mojikumi.NONE;
     } catch (_) {}
+    // Re-apply paragraph style via ActionManager so mixed-style ranges won't reset alignment.
+    forceParagraphLeadingByAM(textLayer, cfg, opts);
     applyTextColorFromCfg(textLayer, cfg);
   }
 
@@ -1139,7 +1421,10 @@ Settings are read from settings.json beside this script.
 
   /**
    * CEP drag-drop: insert one paragraph with same font/style pipeline as bulk import.
-   * payload.fracX / fracY: 0..1 within layout bounds (single artboard / document).
+   * payload.anchorMode:
+   *   - "artboardOrigin": use cfg.startX/startY from artboard/document origin.
+   *   - "docPoint": use payload.docX/docY (document pixel coordinate) as bubble center.
+   *   - otherwise fallback to payload.fracX / fracY in layout bounds.
    */
   function insertBubbleParagraphCEP(doc, payload) {
     if (!doc) throw new Error("没有打开的文档");
@@ -1150,6 +1435,9 @@ Settings are read from settings.json beside this script.
     var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
     var cfg = loadSettings(settingsFile);
 
+    var anchorMode = payload && payload.anchorMode ? String(payload.anchorMode) : "fraction";
+    var docX = payload && payload.docX != null ? Number(payload.docX) : NaN;
+    var docY = payload && payload.docY != null ? Number(payload.docY) : NaN;
     var fracX =
       typeof payload.fracX === "number" && !isNaN(payload.fracX) ? Math.max(0, Math.min(1, payload.fracX)) : 0.12;
     var fracY =
@@ -1179,16 +1467,60 @@ Settings are read from settings.json beside this script.
       var bh = Math.max(72, Math.min(320, Number(cfg.boxHeight || 180) * 0.55));
 
       var inset = 8;
-      var innerL = bounds.left + inset;
-      var innerR = bounds.left + bounds.width - inset;
-      var innerT = bounds.top + inset;
-      var innerB = bounds.top + bounds.height - inset;
-      var spanW = Math.max(1, innerR - innerL);
-      var spanH = Math.max(1, innerB - innerT);
-      var cx = innerL + fracX * spanW;
-      var cy = innerT + fracY * spanH;
-      var x = cx - bw / 2;
-      var y = cy - bh / 2;
+      var x, y;
+      var bubblePick = null;
+      if (anchorMode === "docPoint" && !isNaN(docX) && !isNaN(docY)) {
+        x = docX - bw / 2;
+        y = docY - bh / 2;
+      } else if (anchorMode === "artboardOrigin") {
+        var sx = Number(cfg && cfg.startX != null ? cfg.startX : 50);
+        var sy = Number(cfg && cfg.startY != null ? cfg.startY : 80);
+        if (isNaN(sx)) sx = 50;
+        if (isNaN(sy)) sy = 80;
+        x = bounds.left + sx;
+        y = bounds.top + sy;
+      } else {
+        var innerL = bounds.left + inset;
+        var innerR = bounds.left + bounds.width - inset;
+        var innerT = bounds.top + inset;
+        var innerB = bounds.top + bounds.height - inset;
+        var spanW = Math.max(1, innerR - innerL);
+        var spanH = Math.max(1, innerB - innerT);
+        var cx = innerL + fracX * spanW;
+        var cy = innerT + fracY * spanH;
+        x = cx - bw / 2;
+        y = cy - bh / 2;
+      }
+
+      var precomputed = loadPrecomputedBubblesForPage(doc, cfg, pageNorm);
+      var bubbleCandidates = (precomputed && precomputed.candidates && precomputed.candidates.length)
+        ? precomputed.candidates.slice(0)
+        : detectBubbleCandidates(doc, cfg);
+      var selectionBubble = normalizeSelectionRect(payload && payload.selectionRect ? payload.selectionRect : null);
+      if (selectionBubble) {
+        bubbleCandidates.unshift(selectionBubble);
+      }
+      if (selectionBubble && payload && payload.preferSelectionRect) {
+        bubblePick = { idx: 0, d2: 0, candidate: selectionBubble };
+      } else {
+        bubblePick = pickNearestBubble(bubbleCandidates, isNaN(docX) ? (x + bw / 2) : docX, isNaN(docY) ? (y + bh / 2) : docY, cfg);
+      }
+      if (bubblePick && bubblePick.candidate) {
+        var pad = Number(cfg && cfg.bubblePaddingPx != null ? cfg.bubblePaddingPx : 18);
+        if (!isFinite(pad) || pad < 0) pad = 18;
+        var c = bubblePick.candidate;
+        var innerL = c.left + pad;
+        var innerT = c.top + pad;
+        var innerR = c.right - pad;
+        var innerB = c.bottom - pad;
+        var innerW = Math.max(120, innerR - innerL);
+        var innerH = Math.max(60, innerB - innerT);
+        bw = innerW;
+        bh = innerH;
+        x = innerL;
+        y = innerT;
+      }
+
       var minX = bounds.left + inset;
       var maxX = bounds.left + bounds.width - bw - inset;
       var minY = bounds.top + inset;
@@ -1237,6 +1569,18 @@ Settings are read from settings.json beside this script.
       out.boxHeight = bh;
       out.boundsLeft = bounds.left;
       out.boundsTop = bounds.top;
+      out.detectedBubbles = bubbleCandidates ? bubbleCandidates.length : 0;
+      out.bubbleSource = (precomputed && precomputed.loaded) ? "precomputed" : "layerDetect";
+      out.precomputedBubbleFile = (precomputed && precomputed.source) ? precomputed.source : "";
+      out.precomputedStatus = (precomputed && precomputed.status) ? precomputed.status : "unknown";
+      out.precomputedTried = (precomputed && precomputed.tried) ? precomputed.tried : [];
+      if (bubblePick && bubblePick.candidate) {
+        out.anchorUsed = "bubbleSnap";
+        out.snapBubbleLayerName = bubblePick.candidate.layerName;
+        if (bubblePick.candidate.layerName === "__selectionRect__") {
+          out.anchorUsed = "selectionBubbleSnap";
+        }
+      }
     });
 
     return out;
