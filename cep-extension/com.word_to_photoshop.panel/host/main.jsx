@@ -4,8 +4,10 @@ if (!$.global.WORD_IMPORT_CEP) {
   $.global.WORD_IMPORT_CEP = {};
 }
 
+$.global.WORD_IMPORT_CEP.BUILD_ID = "2026-05-01T13:00+08 directPlace-v1";
+
 $.global.WORD_IMPORT_CEP.ping = function () {
-  return "PONG|Photoshop CEP Host Ready";
+  return "PONG|Photoshop CEP Host Ready|build=" + ($.global.WORD_IMPORT_CEP.BUILD_ID || "");
 };
 
 /** Remove text layers created by this tool: "Word Import #…" (batch) and "Bubble #…" (CEP drag). */
@@ -219,6 +221,12 @@ $.global.WORD_IMPORT_CEP._quoteForCmd = function (s) {
   return "\"" + v.replace(/"/g, "\"\"") + "\"";
 };
 
+/** Double-quotes a path for a .bat/.cmd line (internal " → ""). */
+$.global.WORD_IMPORT_CEP._quoteForBatLine = function (s) {
+  var v = String(s == null ? "" : s);
+  return "\"" + v.replace(/"/g, "\"\"") + "\"";
+};
+
 $.global.WORD_IMPORT_CEP._parseProbeNumber = function (v) {
   var n = Number(v);
   return isNaN(n) ? null : n;
@@ -232,6 +240,45 @@ $.global.WORD_IMPORT_CEP._getCursorProbeStatePath = function () {
     return String(t).replace(/[\/\\]+$/, "") + "/word_import_cursor.json";
   } catch (_) {
     return null;
+  }
+};
+
+$.global.WORD_IMPORT_CEP.getCursorProbePathEncoded = function () {
+  try {
+    var p = $.global.WORD_IMPORT_CEP._getCursorProbeStatePath();
+    if (!p) return "ERR|no_path";
+    return "OK|" + encodeURIComponent(String(p));
+  } catch (e) {
+    return "ERR|" + e.message;
+  }
+};
+
+$.global.WORD_IMPORT_CEP.restartCursorDaemonForProbeV2 = function (repoRootHint) {
+  try {
+    $.global.WORD_IMPORT_CURSOR_DAEMON_READY = false;
+    $.global.WORD_IMPORT_CURSOR_DAEMON_LAST_TRY = 0;
+    var tempDir = Folder.temp;
+    var killPs = new File(tempDir.fsName + "/word_import_kill_cursor_daemon.ps1");
+    killPs.encoding = "UTF-8";
+    if (killPs.open("w")) {
+      try {
+        killPs.write(
+          "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'cursor_daemon\\.ps1' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\r\n"
+        );
+      } finally {
+        killPs.close();
+      }
+    }
+    try {
+      app.system(
+        "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " +
+          $.global.WORD_IMPORT_CEP._quoteForCmd(killPs.fsName)
+      );
+    } catch (_) {}
+    $.global.WORD_IMPORT_CEP._ensureCursorDaemon(repoRootHint);
+    return "OK|restarted";
+  } catch (e2) {
+    return "ERR|" + e2.message;
   }
 };
 
@@ -275,6 +322,7 @@ $.global.WORD_IMPORT_CEP._runCursorProbe = function (repoRootHint) {
     var raw = "";
     try { raw = f.read(); } finally { f.close(); }
     if (!raw) return null;
+    if (raw.length && raw.charCodeAt(0) === 0xFEFF) raw = raw.substring(1);
     var obj = null;
     try {
       if (typeof JSON !== "undefined" && JSON && JSON.parse) obj = JSON.parse(raw);
@@ -344,28 +392,193 @@ $.global.WORD_IMPORT_CEP._shouldUseCursorProbe = function (payload) {
   }
 };
 
-$.global.WORD_IMPORT_CEP._screenToDocPoint = function (doc, probe) {
+$.global.WORD_IMPORT_CEP._getDocViewInfoByAM = function (doc) {
   try {
-    if (!doc || !probe) return null;
-    if (probe.cursorX == null || probe.cursorY == null) return null;
+    if (!doc) return null;
+    var s2t = stringIDToTypeID;
 
-    var view = doc.activeView;
-    if (!view) return null;
-    var zoomRaw = Number(view.zoom);
-    if (isNaN(zoomRaw) || zoomRaw <= 0) return null;
-    var zoom = zoomRaw > 10 ? (zoomRaw / 100.0) : zoomRaw;
-    if (!isFinite(zoom) || zoom <= 0) return null;
+    // viewInfo.activeView.globalBounds (document-space visible rect)
+    var r = new ActionReference();
+    r.putProperty(s2t("property"), s2t("viewInfo"));
+    r.putEnumerated(s2t("document"), s2t("ordinal"), s2t("targetEnum"));
+    var d = executeActionGet(r);
+    if (!d || !d.hasKey(s2t("viewInfo"))) return null;
+    var vi = d.getObjectValue(s2t("viewInfo"));
+    if (!vi || !vi.hasKey(s2t("activeView"))) return null;
+    var av = vi.getObjectValue(s2t("activeView"));
+    if (!av || !av.hasKey(s2t("globalBounds"))) return null;
+    var gb = av.getObjectValue(s2t("globalBounds"));
 
-    var center = view.centerPoint;
-    var centerX = Number(center && center[0] && center[0].as ? center[0].as("px") : center[0]);
-    var centerY = Number(center && center[1] && center[1].as ? center[1].as("px") : center[1]);
-    if (isNaN(centerX) || isNaN(centerY)) return null;
+    function getNum(desc, key) {
+      try {
+        if (!desc || !desc.hasKey(key)) return NaN;
+        var t = desc.getType(key);
+        if (t === DescValueType.DOUBLETYPE) return Number(desc.getDouble(key));
+        if (t === DescValueType.UNITDOUBLE) return Number(desc.getUnitDoubleValue(key));
+        return NaN;
+      } catch (_) {
+        return NaN;
+      }
+    }
+
+    var left = getNum(gb, s2t("left"));
+    var top = getNum(gb, s2t("top"));
+    var right = getNum(gb, s2t("right"));
+    var bottom = getNum(gb, s2t("bottom"));
+    if (!isFinite(left) || !isFinite(top) || !isFinite(right) || !isFinite(bottom)) return null;
+
+    function getBoundsIfAny(desc, keyName) {
+      try {
+        var key = s2t(keyName);
+        if (!desc || !desc.hasKey(key)) return null;
+        var obj = desc.getObjectValue(key);
+        if (!obj) return null;
+        var l = getNum(obj, s2t("left"));
+        var t = getNum(obj, s2t("top"));
+        var r = getNum(obj, s2t("right"));
+        var b = getNum(obj, s2t("bottom"));
+        if (!isFinite(l) || !isFinite(t) || !isFinite(r) || !isFinite(b)) return null;
+        return { left: l, top: t, right: r, bottom: b, key: keyName };
+      } catch (_) {
+        return null;
+      }
+    }
+
+    // Try to read activeView's screen/canvas bounds (names vary between builds).
+    var screenBounds = null;
+    var candidates = ["screenBounds", "frameBounds", "bounds", "canvasBounds", "globalBoundsInScreen", "windowBounds"];
+    for (var ci = 0; ci < candidates.length; ci++) {
+      screenBounds = getBoundsIfAny(av, candidates[ci]);
+      if (screenBounds) break;
+    }
+
+    // zoom (percent) – some PS builds expose it on document descriptor
+    var zoomPct = NaN;
+    try {
+      var rz = new ActionReference();
+      rz.putProperty(s2t("property"), s2t("zoom"));
+      rz.putEnumerated(s2t("document"), s2t("ordinal"), s2t("targetEnum"));
+      var dz = executeActionGet(rz);
+      if (dz && dz.hasKey(s2t("zoom"))) zoomPct = Number(dz.getDouble(s2t("zoom"))) * 100;
+    } catch (_) {}
+
+    // center (document-space) – some PS builds expose it on document descriptor
+    var centerX = (left + right) / 2;
+    var centerY = (top + bottom) / 2;
+    try {
+      var rc = new ActionReference();
+      rc.putProperty(s2t("property"), s2t("center"));
+      rc.putEnumerated(s2t("document"), s2t("ordinal"), s2t("targetEnum"));
+      var dc = executeActionGet(rc);
+      if (dc && dc.hasKey(s2t("center"))) {
+        var c = dc.getObjectValue(s2t("center"));
+        var hx = getNum(c, s2t("horizontal"));
+        var hy = getNum(c, s2t("vertical"));
+        if (isFinite(hx) && isFinite(hy)) {
+          centerX = hx;
+          centerY = hy;
+        }
+      }
+    } catch (_) {}
+
+    return {
+      globalBounds: { left: left, top: top, right: right, bottom: bottom },
+      screenBounds: screenBounds,
+      centerX: centerX,
+      centerY: centerY,
+      zoomPct: zoomPct
+    };
+  } catch (_) {
+    return null;
+  }
+};
+
+$.global.WORD_IMPORT_CEP._screenToDocPoint = function (doc, probe) {
+  function fallbackByClientRatio(doc0, probe0) {
+    try {
+      if (!doc0 || !probe0) return null;
+      var cl = Number(probe0.clientL), ct = Number(probe0.clientT), cr = Number(probe0.clientR), cb = Number(probe0.clientB);
+      var cx = Number(probe0.cursorX), cy = Number(probe0.cursorY);
+      if (!isFinite(cl) || !isFinite(ct) || !isFinite(cr) || !isFinite(cb) || !isFinite(cx) || !isFinite(cy)) return null;
+      if (cr <= cl || cb <= ct) return null;
+      var fx = (cx - cl) / (cr - cl);
+      var fy = (cy - ct) / (cb - ct);
+      if (!isFinite(fx) || !isFinite(fy)) return null;
+      if (fx < 0) fx = 0; if (fx > 1) fx = 1;
+      if (fy < 0) fy = 0; if (fy > 1) fy = 1;
+      var dw = Number(doc0.width && doc0.width.as ? doc0.width.as("px") : doc0.width);
+      var dh = Number(doc0.height && doc0.height.as ? doc0.height.as("px") : doc0.height);
+      if (!isFinite(dw) || !isFinite(dh) || dw <= 0 || dh <= 0) return null;
+      return { x: fx * dw, y: fy * dh };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  try {
+    $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "";
+    if (!doc || !probe) {
+      $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "no_doc_or_probe";
+      return null;
+    }
+    if (probe.cursorX == null || probe.cursorY == null) {
+      $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "no_cursor";
+      return null;
+    }
+
+    // Prefer Action Manager viewInfo since doc.activeView is often null in CEP/ExtendScript.
+    var am = $.global.WORD_IMPORT_CEP._getDocViewInfoByAM(doc);
+    if (!am || !am.globalBounds) {
+      var p0 = fallbackByClientRatio(doc, probe);
+      if (p0) {
+        $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "fallback_client_ratio_no_am_view";
+        return p0;
+      }
+      $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "no_am_view";
+      return null;
+    }
+    var gb = am.globalBounds;
+    var centerX = Number(am.centerX);
+    var centerY = Number(am.centerY);
+    var zoomPct = Number(am.zoomPct);
+    var zoom = isFinite(zoomPct) && zoomPct > 0 ? (zoomPct / 100.0) : NaN;
+    if (!isFinite(zoom) || zoom <= 0) {
+      // As a last resort, derive zoom from globalBounds vs viewport size.
+      var vw = Number(probe.clientR) - Number(probe.clientL);
+      var vh = Number(probe.clientB) - Number(probe.clientT);
+      var gw = Number(gb.right) - Number(gb.left);
+      var gh = Number(gb.bottom) - Number(gb.top);
+      if (isFinite(vw) && isFinite(vh) && vw > 0 && vh > 0 && isFinite(gw) && isFinite(gh) && gw > 0 && gh > 0) {
+        zoom = Math.min(vw / gw, vh / gh);
+      }
+    }
+    if (!isFinite(zoom) || zoom <= 0) {
+      $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "bad_am_zoom";
+      return null;
+    }
+    if (!isFinite(centerX) || !isFinite(centerY)) {
+      centerX = (Number(gb.left) + Number(gb.right)) / 2.0;
+      centerY = (Number(gb.top) + Number(gb.bottom)) / 2.0;
+    }
+    if (!isFinite(centerX) || !isFinite(centerY)) {
+      $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "bad_am_center";
+      return null;
+    }
 
     var viewportL = probe.clientL;
     var viewportT = probe.clientT;
     var viewportR = probe.clientR;
     var viewportB = probe.clientB;
+    var usingScreenBounds = false;
+    if (am.screenBounds) {
+      viewportL = am.screenBounds.left;
+      viewportT = am.screenBounds.top;
+      viewportR = am.screenBounds.right;
+      viewportB = am.screenBounds.bottom;
+      usingScreenBounds = true;
+    }
     if (viewportL == null || viewportT == null || viewportR == null || viewportB == null || viewportR <= viewportL || viewportB <= viewportT) {
+      $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "bad_viewport";
       return null;
     }
 
@@ -375,9 +588,14 @@ $.global.WORD_IMPORT_CEP._screenToDocPoint = function (doc, probe) {
     var dyScreen = probe.cursorY - viewportCY;
     var docX = centerX + (dxScreen / zoom);
     var docY = centerY + (dyScreen / zoom);
-    if (!isFinite(docX) || !isFinite(docY)) return null;
+    if (!isFinite(docX) || !isFinite(docY)) {
+      $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "bad_doc_xy";
+      return null;
+    }
+    $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = usingScreenBounds ? "ok_am_screenBounds" : "ok_am_clientBounds";
     return { x: docX, y: docY };
   } catch (_) {
+    $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "exception";
     return null;
   }
 };
@@ -684,6 +902,7 @@ $.global.WORD_IMPORT_CEP.generateBubbleBoxesFile = function (repoRootHint) {
       }
     }
     var logText = "";
+    var generatedMeta = null;
     try {
       if (logFile.exists) {
         logFile.encoding = "UTF-8";
@@ -699,6 +918,18 @@ $.global.WORD_IMPORT_CEP.generateBubbleBoxesFile = function (repoRootHint) {
         (briefLog ? ("；日志: " + briefLog) : "") +
         "；完整日志: " + String(logFile.fsName);
     }
+    try {
+      var generated = new File(maskOutput.fsName);
+      generated.encoding = "UTF-8";
+      if (generated.open("r")) {
+        var rawJson = "";
+        try { rawJson = generated.read(); } finally { generated.close(); }
+        if (rawJson) {
+          if (typeof JSON !== "undefined" && JSON && JSON.parse) generatedMeta = JSON.parse(rawJson);
+          else generatedMeta = eval("(" + rawJson + ")");
+        }
+      }
+    } catch (_) {}
     try {
       maskOutput.copy(target.fsName);
     } catch (_) {
@@ -721,7 +952,69 @@ $.global.WORD_IMPORT_CEP.generateBubbleBoxesFile = function (repoRootHint) {
       forcedPage: forcePage,
       launcher: usedLauncher,
       shellOutput: String(output || ""),
-      shellLogPath: String(logFile.fsName)
+      shellLogPath: String(logFile.fsName),
+      visualizationDir: generatedMeta && generatedMeta.visualizationDir ? String(generatedMeta.visualizationDir) : "",
+      generatedFiles: generatedMeta && generatedMeta.files ? generatedMeta.files : []
+    });
+  } catch (e) {
+    return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
+  }
+};
+
+$.global.WORD_IMPORT_CEP.generateBubbleMasks = function (repoRootHint) {
+  try {
+    var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
+    if (!repoRoot) return "ERR|无法定位项目目录";
+    var launcherPs1 = new File(repoRoot.fsName + "/tools/launch_mask_gen_visible.ps1");
+    if (!launcherPs1.exists) return "ERR|找不到启动脚本: " + launcherPs1.fsName;
+
+    var inputFolder = Folder.selectDialog("选择页面图片目录（将自动生成 mask/ 黑白图）");
+    if (!inputFolder) return "ERR|已取消选择";
+    if (!inputFolder.exists) return "ERR|目录不存在: " + inputFolder.fsName;
+    var outFolder = new Folder(inputFolder.fsName + "/mask");
+    try { if (!outFolder.exists) outFolder.create(); } catch (_) {}
+
+    // IMPORTANT: Never run `powershell … -Wait` inside app.system() — long blocking freezes / can crash PS during CEP.
+    // Spawn a separate console via `start`; app.system exits as soon as the stub .cmd returns.
+    var runId = String(new Date().getTime());
+    var stubBat = new File(Folder.temp.fsName + "/word_import_mask_spawn_" + runId + ".cmd");
+    stubBat.encoding = "UTF-8";
+    if (!stubBat.open("w")) return "ERR|无法写入临时启动脚本: " + stubBat.fsName;
+    try {
+      stubBat.write("@echo off\r\n");
+      stubBat.write("chcp 65001>nul\r\n");
+      stubBat.write(
+        "start \"Word Import - Mask Generation\" powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Normal -File "
+      );
+      stubBat.write($.global.WORD_IMPORT_CEP._quoteForBatLine(launcherPs1.fsName));
+      stubBat.write(" -InputDir ");
+      stubBat.write($.global.WORD_IMPORT_CEP._quoteForBatLine(inputFolder.fsName));
+      stubBat.write(" -OutputDir ");
+      stubBat.write($.global.WORD_IMPORT_CEP._quoteForBatLine(outFolder.fsName));
+      stubBat.write(" -RepoRoot ");
+      stubBat.write($.global.WORD_IMPORT_CEP._quoteForBatLine(repoRoot.fsName));
+      stubBat.write(" -SaveDebug\r\n");
+    } finally {
+      stubBat.close();
+    }
+
+    var spawnCmd = "cmd.exe /d /c " + $.global.WORD_IMPORT_CEP._quoteForCmd(stubBat.fsName);
+    var spawnOut = "";
+    try {
+      spawnOut = String(app.system(spawnCmd) || "");
+    } finally {
+      try {
+        stubBat.remove();
+      } catch (_) {}
+    }
+
+    return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON({
+      inputDir: String(inputFolder.fsName),
+      maskDir: String(outFolder.fsName),
+      vizDir: String(outFolder.fsName + "/_viz"),
+      launcher: "powershell-visible-detached",
+      shellOutput: spawnOut.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "") || "Detached window launched; do not close until mask run finishes.",
+      shellLogPath: ""
     });
   } catch (e) {
     return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
@@ -1008,25 +1301,100 @@ $.global.WORD_IMPORT_CEP.insertBubbleText = function (payloadText, repoRootHint)
     }
 
     var doc = app.activeDocument;
-    var probe = null;
-    if ($.global.WORD_IMPORT_CEP._shouldUseCursorProbe(payload)) {
-      probe = $.global.WORD_IMPORT_CEP._runCursorProbe(repoRootHint);
-      if (!probe) probe = $.global.WORD_IMPORT_CEP._runCursorProbeOnce(repoRootHint);
+    function resolveSamplerPoint(doc0) {
+      var out = { point: null, count: 0, index: -1 };
+      try {
+        if (!doc0 || !doc0.colorSamplers) return out;
+        var samplers = doc0.colorSamplers;
+        var count = Number(samplers.length || 0);
+        out.count = isFinite(count) && count > 0 ? count : 0;
+        if (!out.count) return out;
+        for (var si = out.count; si >= 1; si--) {
+          var sp = null;
+          // Photoshop collections are usually 1-based; keep a 0-based fallback for safety.
+          try { sp = samplers[si]; } catch (_) { sp = null; }
+          if (!sp) {
+            try { sp = samplers[si - 1]; } catch (_) { sp = null; }
+          }
+          if (!sp || !sp.position || sp.position.length < 2) continue;
+          var sx = Number(sp.position[0] && sp.position[0].as ? sp.position[0].as("px") : sp.position[0]);
+          var sy = Number(sp.position[1] && sp.position[1].as ? sp.position[1].as("px") : sp.position[1]);
+          if (!isFinite(sx) || !isFinite(sy)) continue;
+          out.point = { x: sx, y: sy, source: "colorSampler" };
+          out.index = si;
+          return out;
+        }
+      } catch (_) {}
+      return out;
     }
-    var pointFromProbe = $.global.WORD_IMPORT_CEP._screenToDocPoint(doc, probe);
+
+    var samplerInfo = resolveSamplerPoint(doc);
+    var pointFromSampler = samplerInfo.point;
+    var probe = null;
+    var probeFromPayload = false;
+    var pointFromProbe = null;
+    if (!pointFromSampler) {
+      if (payload && payload.probeSnapshot) {
+        var ps = payload.probeSnapshot;
+        probe = {
+          cursorX: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.cursorX),
+          cursorY: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.cursorY),
+          winL: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.winL),
+          winT: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.winT),
+          winR: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.winR),
+          winB: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.winB),
+          clientL: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.clientL),
+          clientT: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.clientT),
+          clientR: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.clientR),
+          clientB: $.global.WORD_IMPORT_CEP._parseProbeNumber(ps.clientB)
+        };
+        probeFromPayload = true;
+      }
+      if (!probe && $.global.WORD_IMPORT_CEP._shouldUseCursorProbe(payload)) {
+        probe = $.global.WORD_IMPORT_CEP._runCursorProbe(repoRootHint);
+        if (!probe) probe = $.global.WORD_IMPORT_CEP._runCursorProbeOnce(repoRootHint);
+      }
+      pointFromProbe = $.global.WORD_IMPORT_CEP._screenToDocPoint(doc, probe);
+      if (!pointFromProbe && payload && payload.placeAtCursorOnly && probe) {
+        try {
+          var cl = Number(probe.clientL), ct = Number(probe.clientT), cr = Number(probe.clientR), cb = Number(probe.clientB);
+          var cx = Number(probe.cursorX), cy = Number(probe.cursorY);
+          if (isFinite(cl) && isFinite(ct) && isFinite(cr) && isFinite(cb) && isFinite(cx) && isFinite(cy) && cr > cl && cb > ct) {
+            var fx = (cx - cl) / (cr - cl);
+            var fy = (cy - ct) / (cb - ct);
+            if (fx < 0) fx = 0; if (fx > 1) fx = 1;
+            if (fy < 0) fy = 0; if (fy > 1) fy = 1;
+            var dw = Number(doc.width && doc.width.as ? doc.width.as("px") : doc.width);
+            var dh = Number(doc.height && doc.height.as ? doc.height.as("px") : doc.height);
+            if (isFinite(dw) && isFinite(dh) && dw > 0 && dh > 0) {
+              pointFromProbe = { x: fx * dw, y: fy * dh };
+              $.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL = "fallback_payload_ratio";
+            }
+          }
+        } catch (_) {}
+      }
+    }
     var calib = $.global.WORD_IMPORT_CEP._loadCalibration(repoRootHint);
     if (pointFromProbe && calib) {
       pointFromProbe = $.global.WORD_IMPORT_CEP._applyCalibration(pointFromProbe, calib);
     }
     var selInfo = resolveSelectionInfo(doc);
-    if (pointFromProbe) {
+    var debugAnchorSource = "dragApprox";
+    if (pointFromSampler) {
+      payload.anchorMode = "docPoint";
+      payload.docX = pointFromSampler.x;
+      payload.docY = pointFromSampler.y;
+      debugAnchorSource = "colorSampler";
+    } else if (pointFromProbe) {
       payload.anchorMode = "docPoint";
       payload.docX = pointFromProbe.x;
       payload.docY = pointFromProbe.y;
+      debugAnchorSource = "probe";
     } else if (selInfo) {
       payload.anchorMode = "docPoint";
       payload.docX = selInfo.x;
       payload.docY = selInfo.y;
+      debugAnchorSource = "selection";
     }
     if (selInfo) {
       payload.selectionRect = {
@@ -1049,16 +1417,35 @@ $.global.WORD_IMPORT_CEP.insertBubbleText = function (payloadText, repoRootHint)
       payload.anchorMode = "docPoint";
       payload.docX = (payload.selectionRect.left + payload.selectionRect.right) / 2;
       payload.docY = (payload.selectionRect.top + payload.selectionRect.bottom) / 2;
+      if (debugAnchorSource !== "colorSampler" && debugAnchorSource !== "probe") debugAnchorSource = "selection";
     }
 
     var api = $.global.WORD_IMPORT_CEP._loadCoreApi(repoRootHint);
     if (!api.insertBubbleParagraphCEP) return "ERR|导入核心版本过旧，请重装 CEP 扩展";
+    if (payload && payload.previewCandidatesOnly) {
+      payload.returnBubbleCandidates = true;
+      payload.candidateTopN = payload.candidateTopN != null ? payload.candidateTopN : 5;
+      payload.useCursorProbe = false;
+      var preview = api.insertBubbleParagraphCEP(doc, payload);
+      return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON(preview || {});
+    }
     var result = api.insertBubbleParagraphCEP(doc, payload);
     try {
       result.debugSelInfo = !!selInfo;
       result.debugSelectionRectPassed = !!(payload && payload.selectionRect);
       result.debugPreferSelectionRect = !!(payload && payload.preferSelectionRect);
       result.debugLockedRect = !!lockedRect;
+      result.debugProbeFromPayload = !!probeFromPayload;
+      result.debugProbeAvailable = !!probe;
+      result.debugPointFromProbe = !!pointFromProbe;
+      result.debugProbeCursorX = probe && probe.cursorX != null ? Number(probe.cursorX) : null;
+      result.debugProbeCursorY = probe && probe.cursorY != null ? Number(probe.cursorY) : null;
+      result.debugScreenToDocFail = String($.global.WORD_IMPORT_CEP._SCREEN_TO_DOC_LAST_FAIL || "");
+      result.debugAnchorSource = String(debugAnchorSource || "");
+      result.debugSamplerCount = samplerInfo && samplerInfo.count != null ? Number(samplerInfo.count) : 0;
+      result.debugSamplerIndex = samplerInfo && samplerInfo.index != null ? Number(samplerInfo.index) : -1;
+      result.debugSamplerX = pointFromSampler ? Number(pointFromSampler.x) : null;
+      result.debugSamplerY = pointFromSampler ? Number(pointFromSampler.y) : null;
       if (payload && payload.selectionRect) result.debugSelectionRect = payload.selectionRect;
     } catch (_) {}
     if (!result.anchorUsed && pointFromProbe) {
@@ -1077,3 +1464,4 @@ $.global.WORD_IMPORT_CEP.insertBubbleText = function (payloadText, repoRootHint)
     return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
   }
 };
+

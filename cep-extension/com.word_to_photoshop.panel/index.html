@@ -38,11 +38,9 @@
             将翻译稿（docx.)转换为导入数据
           </button>
           <div class="quoteToolbar" style="margin-top:8px">
-            <button type="button" id="btnGenBubbleBoxes" class="miniBtn">从 mask 生成预识别框</button>
-            <button type="button" id="btnBindBubbleBoxes" class="miniBtn">绑定 bubble_boxes.json</button>
-            <button type="button" id="btnClearBubbleBoxes" class="miniBtn">清除 bubble_boxes 绑定</button>
+            <button type="button" id="btnGenMasks" class="miniBtn">生成黑白mask（mask/目录）</button>
           </div>
-          <p class="sectionHint">可一键从 mask 目录生成；拖拽会自动检查 .jsxdata/PSD 同目录的预识别框。</p>
+          <p class="sectionHint">将自动在当前目录创建 mask/ 并生成每页二值黑白图（白=气泡）。后续投放将按当前页自动读取。</p>
         </section>
 
         <section class="panelSection dangerZone" aria-label="危险操作">
@@ -55,7 +53,7 @@
           <p class="sectionHint">删除 PSD 中以「Word Import #」「Bubble #」前缀的导入文本图层</p>
         </section>
 
-        <section class="panelSection" aria-label="调试">
+        <section class="panelSection" aria-label="调试" id="devTools" style="display:none">
           <button type="button" id="btnPing" class="btnGhost btnWide">
             检查 CEP 与 Photoshop 连接
           </button>
@@ -69,15 +67,18 @@
             <button type="button" id="btnClearSelRect" class="miniBtn">清除锁定目标框</button>
             <button type="button" id="btnDiagSel" class="miniBtn">诊断当前选区</button>
           </div>
+          <p class="sectionHint">隐藏入口：在标题“漫画汉化导入助手”上连点 6 次。</p>
         </section>
 
         <section class="card quotesCard panelSection">
           <div class="quoteHeader">
             <div>
               <div class="sectionTitle-inline">逐条台词</div>
-              <div class="quoteSubtitle">当前默认：优先按常驻鼠标助手投放；失败时回退到 PS 选区中心，再回退到近似拖拽位置</div>
+              <div class="quoteSubtitle">点击一条台词选中（高亮）→ 切换到 Photoshop → 在画布上单击目标位置即可投放。对白框来自 PSD 同目录 mask/（由面板生成）。</div>
             </div>
-            <button type="button" id="btnReloadQuotes" class="miniBtn">刷新</button>
+            <div class="quoteHeaderActions">
+              <button type="button" id="btnReloadQuotes" class="miniBtn">刷新</button>
+            </div>
           </div>
           <div class="quoteToolbar">
             <label for="pageSelect">页码</label>

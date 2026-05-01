@@ -20,6 +20,25 @@ from typing import Dict, List, Sequence
 import cv2
 import numpy as np
 
+DEBUG_LOG_PATH = Path(__file__).resolve().parent.parent / "debug-491474.log"
+
+
+def debug_log(hypothesis_id: str, location: str, message: str, data: Dict[str, object]) -> None:
+    try:
+        payload = {
+            "sessionId": "491474",
+            "runId": "bubble-gen-debug-1",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+        }
+        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
 
 @dataclass
 class BubbleBox:
@@ -91,6 +110,21 @@ def discover_masks(mask_dir: Path) -> Sequence[Path]:
     return sorted([p for p in mask_dir.iterdir() if p.is_file() and p.suffix.lower() in exts])
 
 
+def is_probably_binary_mask(gray: np.ndarray) -> bool:
+    # True binary masks should be mostly near 0/255 with very few mid-tones.
+    if gray is None or gray.size == 0:
+        return False
+    near_binary = np.logical_or(gray <= 12, gray >= 243)
+    ratio = float(np.count_nonzero(near_binary)) / float(gray.size)
+    debug_log(
+        "H1",
+        "tools/extract_bubbles.py:is_probably_binary_mask",
+        "binary ratio computed",
+        {"ratio": ratio, "size": int(gray.size)},
+    )
+    return ratio >= 0.94
+
+
 def page_from_name(name: str, page_pattern: re.Pattern[str]) -> str | None:
     stem = Path(name).stem
     lower_stem = stem.lower()
@@ -119,6 +153,37 @@ def postprocess_mask(gray: np.ndarray, morph_close_kernel: int) -> np.ndarray:
     return bw
 
 
+def postprocess_non_binary(gray: np.ndarray, morph_close_kernel: int) -> np.ndarray:
+    # For non-binary comic pages, approximate white speech balloons:
+    # high value + low saturation + local bright regions.
+    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if morph_close_kernel and morph_close_kernel > 1:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_close_kernel, morph_close_kernel))
+        bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, k, iterations=1)
+    return bw
+
+
+def postprocess_non_binary_from_color(bgr: np.ndarray, morph_close_kernel: int) -> np.ndarray:
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    _ = h  # Keep signature explicit; hue is intentionally unused.
+
+    # White-ish areas in comics: high V, low S.
+    mask_white = cv2.inRange(hsv, (0, 0, 145), (180, 95, 255))
+
+    # Keep strong local bright areas for balloons with texture/noise.
+    blur = cv2.GaussianBlur(v, (5, 5), 0)
+    adap = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 41, -4)
+
+    bw = cv2.bitwise_and(mask_white, adap)
+    bw = cv2.medianBlur(bw, 3)
+    if morph_close_kernel and morph_close_kernel > 1:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_close_kernel, morph_close_kernel))
+        bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, k, iterations=1)
+        bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, k, iterations=1)
+    return bw
+
+
 def extract_boxes(
     mask: np.ndarray,
     *,
@@ -127,6 +192,7 @@ def extract_boxes(
     min_width: int,
     min_height: int,
     max_ratio: float,
+    min_fill_ratio: float = 0.0,
 ) -> List[BubbleBox]:
     num_labels, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     img_h, img_w = mask.shape[:2]
@@ -139,6 +205,10 @@ def extract_boxes(
         if area < min_area or area > max_area:
             continue
         if w < min_width or h < min_height:
+            continue
+        bbox_area = max(1, int(w) * int(h))
+        fill_ratio = float(area) / float(bbox_area)
+        if fill_ratio < min_fill_ratio:
             continue
         ratio = max(w / max(1, h), h / max(1, w))
         if ratio > max_ratio:
@@ -157,6 +227,7 @@ def extract_boxes_with_fallback(mask: np.ndarray, args: argparse.Namespace) -> t
         min_width=args.min_width,
         min_height=args.min_height,
         max_ratio=args.max_ratio,
+        min_fill_ratio=0.05,
     )
     if primary:
         return primary, "primary"
@@ -169,14 +240,71 @@ def extract_boxes_with_fallback(mask: np.ndarray, args: argparse.Namespace) -> t
         min_width=max(20, int(args.min_width * 0.6)),
         min_height=max(14, int(args.min_height * 0.6)),
         max_ratio=max(args.max_ratio, 24.0),
+        min_fill_ratio=0.03,
     )
     if relaxed:
         return relaxed, "fallback_relaxed"
     return [], "empty"
 
 
+def extract_boxes_non_binary(mask: np.ndarray, args: argparse.Namespace) -> tuple[List[BubbleBox], str]:
+    primary = extract_boxes(
+        mask,
+        min_area=max(args.min_area, 2600),
+        max_area_ratio=min(args.max_area_ratio, 0.30),
+        min_width=max(args.min_width, 72),
+        min_height=max(args.min_height, 44),
+        max_ratio=min(args.max_ratio, 9.0),
+        min_fill_ratio=0.18,
+    )
+    if primary:
+        return primary, "non_binary_primary"
+    relaxed = extract_boxes(
+        mask,
+        min_area=max(900, int(args.min_area * 0.55)),
+        max_area_ratio=min(0.40, args.max_area_ratio),
+        min_width=max(40, int(args.min_width * 0.8)),
+        min_height=max(26, int(args.min_height * 0.8)),
+        max_ratio=min(12.0, max(args.max_ratio, 12.0)),
+        min_fill_ratio=0.12,
+    )
+    if relaxed:
+        return relaxed, "non_binary_relaxed"
+    return [], "non_binary_empty"
+
+
+def write_visualization(image_path: Path, page: str, boxes: Sequence[BubbleBox], viz_dir: Path) -> str:
+    viz_dir.mkdir(parents=True, exist_ok=True)
+    src = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if src is None:
+        return ""
+    canvas = src.copy()
+    for i, b in enumerate(boxes):
+        cv2.rectangle(canvas, (int(b.left), int(b.top)), (int(b.right), int(b.bottom)), (0, 255, 120), 2)
+        label = f"{i+1}:{int(b.area)}"
+        tx = max(4, int(b.left))
+        ty = max(18, int(b.top) - 6)
+        cv2.putText(canvas, label, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 120), 1, cv2.LINE_AA)
+    header = f"page={page} boxes={len(boxes)} file={image_path.name}"
+    cv2.putText(canvas, header, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 220, 80), 2, cv2.LINE_AA)
+    out_name = image_path.stem + ".bubble_preview.png"
+    out_path = viz_dir / out_name
+    cv2.imwrite(str(out_path), canvas)
+    return str(out_path)
+
+
 def main() -> int:
     args = parse_args()
+    debug_log(
+        "H2",
+        "tools/extract_bubbles.py:main:start",
+        "extract bubbles started",
+        {
+            "maskDir": str(args.mask_dir),
+            "output": str(args.output),
+            "forcePage": str(args.force_page or ""),
+        },
+    )
     if not args.mask_dir.exists():
         raise SystemExit(f"Mask directory not found: {args.mask_dir}")
 
@@ -188,18 +316,48 @@ def main() -> int:
 
     pages: Dict[str, List[Dict[str, float]]] = {}
     files_meta: List[Dict[str, object]] = []
+    viz_dir = args.output.parent / "_bubble_viz"
 
     for mask_path in mask_paths:
-        page = forced_page or page_from_name(mask_path.name, page_pattern)
+        parsed_page = page_from_name(mask_path.name, page_pattern)
+        if forced_page and parsed_page and parsed_page != forced_page:
+            continue
+        page = forced_page or parsed_page
         if not page:
             continue
-        gray = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-        if gray is None:
+        bgr = cv2.imread(str(mask_path), cv2.IMREAD_COLOR)
+        if bgr is None:
+            debug_log(
+                "H3",
+                "tools/extract_bubbles.py:main:read",
+                "skip unreadable image",
+                {"file": mask_path.name},
+            )
             continue
-        processed = postprocess_mask(gray, args.morph_close_kernel)
-        boxes, pass_name = extract_boxes_with_fallback(processed, args)
-        pages[page] = [b.as_dict() for b in boxes]
-        files_meta.append({"file": mask_path.name, "page": page, "count": len(boxes), "pass": pass_name})
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        is_binary = is_probably_binary_mask(gray)
+        if not is_binary:
+            debug_log(
+                "H4",
+                "tools/extract_bubbles.py:main:non_binary_fallback",
+                "non binary image uses otsu fallback",
+                {"file": mask_path.name},
+            )
+            processed = postprocess_non_binary_from_color(bgr, args.morph_close_kernel)
+            boxes, pass_name = extract_boxes_non_binary(processed, args)
+        else:
+            processed = postprocess_mask(gray, args.morph_close_kernel)
+            boxes, pass_name = extract_boxes_with_fallback(processed, args)
+        pages.setdefault(page, [])
+        pages[page].extend([b.as_dict() for b in boxes])
+        viz_path = write_visualization(mask_path, page, boxes, viz_dir)
+        files_meta.append({
+            "file": mask_path.name,
+            "page": page,
+            "count": len(boxes),
+            "pass": pass_name if is_binary else ("non_binary_input+" + pass_name),
+            "viz": viz_path,
+        })
 
     payload = {
         "version": 1,
@@ -219,6 +377,7 @@ def main() -> int:
         },
         "pages": pages,
         "files": files_meta,
+        "visualizationDir": str(viz_dir),
     }
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

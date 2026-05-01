@@ -186,6 +186,13 @@ button:active {
   color: rgba(232, 234, 239, 0.45);
 }
 
+.quoteHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .quoteToolbar {
   display: flex;
   align-items: center;
@@ -219,6 +226,12 @@ button:active {
   flex-shrink: 0;
 }
 
+.miniBtnPrimary {
+  border-color: rgba(47, 137, 239, 0.55);
+  background: rgba(47, 137, 239, 0.22);
+  color: #f5f9ff;
+}
+
 .quoteList {
   flex: 1;
   min-height: 140px;
@@ -246,7 +259,7 @@ button:active {
   border-radius: 8px;
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.04);
-  cursor: grab;
+  cursor: pointer;
 }
 
 .quoteItem:hover {
@@ -255,11 +268,13 @@ button:active {
 }
 
 .quoteItem:active {
-  cursor: grabbing;
+  cursor: pointer;
 }
 
-.quoteItem.dragging {
-  opacity: 0.55;
+.quoteItemSelected {
+  border-color: rgba(47, 137, 239, 0.55);
+  box-shadow: 0 0 0 1px rgba(47, 137, 239, 0.22);
+  background: rgba(47, 137, 239, 0.08);
 }
 
 .quoteMeta {

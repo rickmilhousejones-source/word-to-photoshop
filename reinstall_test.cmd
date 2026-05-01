@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ==========================================
-echo [1/3] Kill Photoshop related processes
+echo [1/4] Kill Photoshop related processes
 echo ==========================================
 for %%P in (
   "Photoshop.exe"
@@ -21,7 +21,7 @@ echo [OK] Kill step done
 echo.
 
 echo ==========================================
-echo [2/3] Uninstall CEP
+echo [2/4] Uninstall CEP
 echo ==========================================
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\uninstall_cep.ps1" -NoPause
 if errorlevel 1 (
@@ -34,7 +34,7 @@ echo [OK] Uninstall done
 echo.
 
 echo ==========================================
-echo [3/3] Install CEP
+echo [3/4] Install CEP
 echo ==========================================
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\install_cep.ps1" -NoPause
 if errorlevel 1 (
@@ -43,6 +43,31 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+
+echo.
+echo ==========================================
+echo [4/4] Launch Photoshop
+echo ==========================================
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='SilentlyContinue';" ^
+  "$exe=$null;" ^
+  "try { $cmd=Get-Command 'Photoshop.exe' -ErrorAction SilentlyContinue; if($cmd -and $cmd.Source){ $exe=$cmd.Source } } catch {}" ^
+  "if(-not $exe){" ^
+  "  $keys=@(" ^
+  "    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe'," ^
+  "    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe'," ^
+  "    'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe'," ^
+  "    'HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\Photoshop.exe'" ^
+  "  );" ^
+  "  foreach($k in $keys){" ^
+  "    try { if(Test-Path $k){ $v=(Get-Item $k).GetValue(''); if($v -and (Test-Path $v)){ $exe=$v; break } } } catch {}" ^
+  "  }" ^
+  "}" ^
+  "if($exe){" ^
+  "  try { Start-Process -FilePath $exe | Out-Null; Write-Host ('[OK] Photoshop launched: ' + $exe) } catch { Write-Host ('[WARN] Failed to launch Photoshop: ' + $_.Exception.Message) }" ^
+  "} else {" ^
+  "  Write-Host '[WARN] Photoshop.exe not found via PATH or registry App Paths.';" ^
+  "}"
 
 echo.
 echo [OK] Reinstall completed

@@ -1,11 +1,32 @@
 (function () {
+  var BUILD_ID = "2026-05-01T13:00+08 directPlace-v1";
   var logBox = document.getElementById("logBox");
   var pageSelect = document.getElementById("pageSelect");
   var quoteList = document.getElementById("quoteList");
-  var panelWrap = document.querySelector(".wrap");
+  var devTools = document.getElementById("devTools");
   var repoRootHint = "";
   var quoteState = { pages: [], defaultPage: "001" };
-  var lastDragPoint = { x: NaN, y: NaN };
+  var pendingQuote = null;
+  var pendingRowEl = null;
+  var titleTapCount = 0;
+  var titleTapTimer = 0;
+
+  /** @type {string} */
+  var probePathUtf8 = "";
+  var placementArmTimerId = 0;
+  var placementIntervalId = 0;
+  var lastProbeLmbDown = false;
+  var warnedProbeV1 = false;
+  var isPlacingQuote = false;
+  var lastPlacementTriggerTs = 0;
+  var lastPlacementRejectLogTs = 0;
+  var lastPlacementHeartbeatTs = 0;
+  var hoverStableSinceTs = 0;
+  var lastProbeCursorX = NaN;
+  var lastProbeCursorY = NaN;
+  var lastTickEarlyLogTs = 0;
+  var requireMouseUpBeforeTrigger = false;
+  var suppressTriggerUntilTs = 0;
 
   function log(msg) {
     var now = new Date();
@@ -49,8 +70,72 @@
     try { return JSON.parse(raw); } catch (_) { return null; }
   }
 
-  function sanitizeForDrag(text) {
-    return String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+  function getPanelScreenRect() {
+    try {
+      var sx = Number(window.screenX);
+      var sy = Number(window.screenY);
+      if (!isFinite(sx)) sx = Number(window.screenLeft);
+      if (!isFinite(sy)) sy = Number(window.screenTop);
+      var ow = Number(window.outerWidth);
+      var oh = Number(window.outerHeight);
+      if (!isFinite(sx) || !isFinite(sy) || !isFinite(ow) || !isFinite(oh) || ow <= 0 || oh <= 0) return null;
+      return { left: sx, top: sy, right: sx + ow, bottom: sy + oh };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function debugLog(hypothesisId, location, message, data) {
+    // #region agent log
+    try {
+      if (typeof fetch === "function") {
+        fetch('http://127.0.0.1:7706/ingest/e060ea63-a144-43df-ae0b-adf401789755',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2cdb9a'},body:JSON.stringify({sessionId:'2cdb9a',runId:'run-client-placement',hypothesisId:hypothesisId,location:location,message:message,data:data||{},timestamp:Date.now()})}).catch(()=>{});
+      }
+    } catch (_) {}
+    // #endregion
+  }
+
+  function buildCandidatePromptText(previewInfo) {
+    var list = (previewInfo && previewInfo.candidates) ? previewInfo.candidates : [];
+    if (!list.length) return "";
+    var lines = [];
+    lines.push("请选择目标气泡编号（1-" + list.length + "），取消则放弃本次投放：");
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i] || {};
+      var w = Math.max(0, Number(c.right) - Number(c.left));
+      var h = Math.max(0, Number(c.bottom) - Number(c.top));
+      var dist = Number(c.distancePx);
+      var distText = isFinite(dist) ? dist.toFixed(1) : "?";
+      lines.push(
+        (i + 1) + ". 距离 " + distText + "px，框 " + Math.round(w) + "x" + Math.round(h) +
+        (c.layerName ? ("，" + c.layerName) : "")
+      );
+    }
+    return lines.join("\n");
+  }
+
+  function pickBubbleCandidate(previewInfo) {
+    var list = (previewInfo && previewInfo.candidates) ? previewInfo.candidates : [];
+    debugLog("H6", "client/main.js:pickBubbleCandidate:entry", "candidate picker opened", {
+      candidateCount: list.length,
+      detectedBubbles: previewInfo && previewInfo.detectedBubbles != null ? previewInfo.detectedBubbles : null,
+      precomputedStatus: previewInfo && previewInfo.precomputedStatus ? previewInfo.precomputedStatus : "",
+      bubbleSource: previewInfo && previewInfo.bubbleSource ? previewInfo.bubbleSource : ""
+    });
+    if (!list.length) return 0;
+    var answer = window.prompt(buildCandidatePromptText(previewInfo), "1");
+    debugLog("H7", "client/main.js:pickBubbleCandidate:answer", "raw answer received", {
+      answer: answer == null ? null : String(answer)
+    });
+    if (answer == null) return null;
+    var n = parseInt(String(answer).trim(), 10);
+    debugLog("H7", "client/main.js:pickBubbleCandidate:parsed", "parsed answer", {
+      parsed: isFinite(n) ? n : null,
+      min: 1,
+      max: list.length
+    });
+    if (!isFinite(n) || n < 1 || n > list.length) return -1;
+    return n - 1;
   }
 
   function exportDocxToJsxdata() {
@@ -70,19 +155,254 @@
     });
   }
 
-  function refreshBubbleBoxesStatus() {
-    callHost('WORD_IMPORT_CEP.getBubbleBoxesStatus("' + escHostString(repoRootHint) + '")', function (result) {
-      if (!result || result.indexOf("OK|") !== 0) {
-        log("读取 bubble_boxes 状态失败: " + (result || "UNKNOWN_ERROR"));
+  function refreshBubbleBoxesStatus() { /* deprecated */ }
+
+  function stopPlacementWatch() {
+    if (placementArmTimerId) {
+      try { window.clearTimeout(placementArmTimerId); } catch (_) {}
+      placementArmTimerId = 0;
+    }
+    if (placementIntervalId) {
+      try { window.clearInterval(placementIntervalId); } catch (_) {}
+      placementIntervalId = 0;
+    }
+    // Keep last down state across arm cycles; prevents false retrigger while holding mouse.
+    hoverStableSinceTs = 0;
+    lastProbeCursorX = NaN;
+    lastProbeCursorY = NaN;
+    requireMouseUpBeforeTrigger = false;
+  }
+
+  function startPlacementWatch() {
+    if (placementIntervalId) return;
+    if (!pendingQuote) {
+      log("调试: 未启动轮询（pendingQuote 为空）");
+      return;
+    }
+    if (!probePathUtf8) {
+      log("调试: 未启动轮询（probePath 为空），尝试重新绑定探针。");
+      fetchProbePathFromHost();
+      return;
+    }
+    placementIntervalId = window.setInterval(tickPlacementWatch, 30);
+    // #region agent log
+    debugLog("H5", "client/main.js:startPlacementWatch", "watch loop started", {
+      hasPendingQuote: !!pendingQuote,
+      probePathLen: probePathUtf8 ? String(probePathUtf8).length : 0
+    });
+    // #endregion
+    log("调试: 画布点击轮询已启动。");
+  }
+
+  function schedulePlacementArm() {
+    stopPlacementWatch();
+    if (!pendingQuote) return;
+    requireMouseUpBeforeTrigger = true;
+    log("调试: 已进入待点击状态（400ms 后开始监听）。");
+    placementArmTimerId = window.setTimeout(function () {
+      placementArmTimerId = 0;
+      startPlacementWatch();
+    }, 400);
+  }
+
+  function tickPlacementWatch() {
+    if (!pendingQuote || isPlacingQuote) {
+      // #region agent log
+      debugLog("H6", "client/main.js:tickPlacementWatch", "tick early return pending/placing", {
+        hasPendingQuote: !!pendingQuote,
+        isPlacingQuote: !!isPlacingQuote
+      });
+      // #endregion
+      return;
+    }
+    if (!probePathUtf8 || !window.cep || !window.cep.fs) {
+      // #region agent log
+      debugLog("H6", "client/main.js:tickPlacementWatch", "tick early return probe path or cep fs unavailable", {
+        hasProbePath: !!probePathUtf8,
+        hasCepObj: !!window.cep,
+        hasCepFs: !!(window.cep && window.cep.fs)
+      });
+      // #endregion
+      return;
+    }
+    var hbNow = Date.now();
+    if (hbNow - lastPlacementHeartbeatTs > 1200) {
+      lastPlacementHeartbeatTs = hbNow;
+      log("调试: 监听中，等待在 PS 画布单击...");
+    }
+    var res = window.cep.fs.readFile(probePathUtf8);
+    if (!res || res.err !== 0 || res.data == null) {
+      var t0 = Date.now();
+      if (t0 - lastTickEarlyLogTs > 1000) {
+        lastTickEarlyLogTs = t0;
+        // #region agent log
+        debugLog("H6", "client/main.js:tickPlacementWatch", "probe read failed", {
+          hasRes: !!res,
+          err: res ? Number(res.err) : null,
+          hasData: !!(res && res.data != null),
+          probePath: String(probePathUtf8 || "")
+        });
+        // #endregion
+      }
+      return;
+    }
+    var o = null;
+    try {
+      var rawProbe = String(res.data == null ? "" : res.data);
+      if (rawProbe.length && rawProbe.charCodeAt(0) === 0xfeff) {
+        rawProbe = rawProbe.slice(1);
+      }
+      o = JSON.parse(rawProbe);
+    } catch (_) {
+      var t1 = Date.now();
+      if (t1 - lastTickEarlyLogTs > 1000) {
+        lastTickEarlyLogTs = t1;
+        // #region agent log
+        debugLog("H7", "client/main.js:tickPlacementWatch", "probe json parse failed", {
+          dataHead: String(res.data || "").slice(0, 120)
+        });
+        // #endregion
+      }
+      return;
+    }
+    if (!o || (o.probeVersion || 0) < 2) {
+      if (!warnedProbeV1) {
+        warnedProbeV1 = true;
+        log("画布点击投放需要新版鼠标探针：请重启 Photoshop 一次。");
+      }
+      return;
+    }
+    var down = !!o.lmbDown;
+    var edge = down && !lastProbeLmbDown;
+    lastProbeLmbDown = down;
+    if (requireMouseUpBeforeTrigger) {
+      if (!down) requireMouseUpBeforeTrigger = false;
+      return;
+    }
+    var nowTs = Date.now();
+    if (nowTs - lastPlacementTriggerTs < 600) return;
+    if (nowTs < suppressTriggerUntilTs) {
+      // #region agent log
+      debugLog("H10", "client/main.js:tickPlacementWatch", "trigger suppressed by post-select cooldown", {
+        remainMs: suppressTriggerUntilTs - nowTs
+      });
+      // #endregion
+      return;
+    }
+
+    var okFg = !!o.foregroundIsPhotoshop;
+    var okAligned = !!o.cursorFgAligned;
+    var okInClient = !!o.cursorInForegroundClient;
+    if (!okFg || !okAligned || !okInClient) {
+      // #region agent log
+      debugLog("H2", "client/main.js:tickPlacementWatch", "probe rejected by foreground constraints", {
+        okFg: okFg,
+        okAligned: okAligned,
+        okInClient: okInClient,
+        fgProc: String(o.foregroundProcessName || "")
+      });
+      // #endregion
+      hoverStableSinceTs = 0;
+      lastProbeCursorX = NaN;
+      lastProbeCursorY = NaN;
+      if (nowTs - lastPlacementRejectLogTs > 1200) {
+        lastPlacementRejectLogTs = nowTs;
+        log(
+          "点击未触发：foregroundIsPhotoshop=" + okFg +
+            ", cursorFgAligned=" + okAligned +
+            ", cursorInForegroundClient=" + okInClient +
+            ", fgProc=" + String(o.foregroundProcessName || "")
+        );
+      }
+      return;
+    }
+
+    var panelRect = getPanelScreenRect();
+    if (panelRect) {
+      var inPanel =
+        Number(o.cursorX) >= panelRect.left &&
+        Number(o.cursorX) < panelRect.right &&
+        Number(o.cursorY) >= panelRect.top &&
+        Number(o.cursorY) < panelRect.bottom;
+      if (inPanel) {
+        // #region agent log
+        debugLog("H9", "client/main.js:tickPlacementWatch", "cursor is inside CEP panel rect; ignore trigger", {
+          cursorX: Number(o.cursorX),
+          cursorY: Number(o.cursorY),
+          panelLeft: panelRect.left,
+          panelTop: panelRect.top,
+          panelRight: panelRect.right,
+          panelBottom: panelRect.bottom
+        });
+        // #endregion
         return;
       }
-      var info = decodePayload(result.slice(3)) || {};
-      if (info.exists) {
-        log("预识别框已就绪: " + (info.targetPath || ""));
+    }
+
+    // Primary trigger: rising edge only (one physical click => one placement).
+    var shouldAttempt = edge;
+    if (shouldAttempt) {
+      // #region agent log
+      debugLog("H1", "client/main.js:tickPlacementWatch", "trigger condition passed", {
+        down: down,
+        edge: edge,
+        cursorX: Number(o.cursorX),
+        cursorY: Number(o.cursorY)
+      });
+      // #endregion
+      lastPlacementTriggerTs = nowTs;
+      log("检测到画布点击，开始直投...");
+      triggerInsertQuoteToPs(pendingQuote, { directPlace: true, probeSnapshot: o });
+      return;
+    }
+
+    // Keep one explicit click -> one placement. Do not auto-trigger by hover.
+  }
+
+  function triggerInsertQuoteToPs(item, options) {
+    // #region agent log
+    debugLog("H3", "client/main.js:triggerInsertQuoteToPs", "insert trigger entered", {
+      hasItem: !!item,
+      directPlace: !!(options && options.directPlace),
+      isPlacingQuote: !!isPlacingQuote
+    });
+    // #endregion
+    stopPlacementWatch();
+    isPlacingQuote = true;
+    insertQuoteToPs(item, options || {}, function () {
+      isPlacingQuote = false;
+      if (pendingQuote) schedulePlacementArm();
+    });
+  }
+
+  function fetchProbePathFromHost() {
+    callHost("WORD_IMPORT_CEP.getCursorProbePathEncoded()", function (r) {
+      if (r && r.indexOf("OK|") === 0) {
+        try {
+          probePathUtf8 = decodeURIComponent(String(r.slice(3)));
+        } catch (_) {
+          probePathUtf8 = String(r.slice(3));
+        }
+        log("画布点击投放：已连接探针文件。");
       } else {
-        log("预识别框未绑定（目标路径）: " + (info.targetPath || "unknown"));
+        probePathUtf8 = "";
+        log("画布点击投放：无法读取探针路径（" + String(r || "") + "）。");
       }
     });
+  }
+
+  function bootstrapCursorProbe() {
+    callHost(
+      'WORD_IMPORT_CEP.restartCursorDaemonForProbeV2("' + escHostString(repoRootHint) + '")',
+      function (r) {
+        if (r && r.indexOf("OK|") === 0) {
+          log("鼠标助手已就绪（画布点击投放）。");
+        } else {
+          log("鼠标助手启动：" + String(r || "") + "。");
+        }
+        window.setTimeout(fetchProbePathFromHost, 250);
+      }
+    );
   }
 
   function getSelectedPageObj() {
@@ -116,80 +436,222 @@
     if (!pageSelect.value) pageSelect.selectedIndex = 0;
   }
 
-  function insertQuoteToPs(item, ev) {
-    var vw = Math.max(1, window.innerWidth || 360);
-    var vh = Math.max(1, window.innerHeight || 520);
-    var cx = ev && typeof ev.clientX === "number" ? ev.clientX : NaN;
-    var cy = ev && typeof ev.clientY === "number" ? ev.clientY : NaN;
-    if (isNaN(cx) || isNaN(cy) || (cx === 0 && cy === 0)) {
-      cx = lastDragPoint.x;
-      cy = lastDragPoint.y;
+  function selectQuoteItem(item, rowEl) {
+    if (pendingRowEl && pendingRowEl !== rowEl) {
+      try { pendingRowEl.classList.remove("quoteItemSelected"); } catch (_) {}
     }
+    pendingQuote = item;
+    pendingRowEl = rowEl;
+    try { rowEl.classList.add("quoteItemSelected"); } catch (_) {}
+    log(
+      "已选择 #" + item.page + " 段 " + item.paragraph +
+        "：请切换到 Photoshop，在画布上单击要投放的位置。"
+    );
+    // #region agent log
+    debugLog("H1", "client/main.js:selectQuoteItem", "quote selected and armed", {
+      page: String(item && item.page || ""),
+      paragraph: Number(item && item.paragraph),
+      hasSegments: !!(item && item.segments && item.segments.length)
+    });
+    // #endregion
+    suppressTriggerUntilTs = Date.now() + 700;
+    schedulePlacementArm();
+  }
 
-    var rQl = quoteList.getBoundingClientRect();
-    var inQuoteList =
-      !isNaN(cx) &&
-      !isNaN(cy) &&
-      cx >= rQl.left &&
-      cx <= rQl.right &&
-      cy >= rQl.top &&
-      cy <= rQl.bottom;
-    var rPanel = panelWrap ? panelWrap.getBoundingClientRect() : null;
-    var rUse = inQuoteList ? rQl : rPanel && rPanel.width >= 80 ? rPanel : null;
-    if (!rUse) rUse = { left: 0, top: 0, width: vw, height: vh };
-    if (isNaN(cx) || isNaN(cy) || (cx === 0 && cy === 0)) {
-      cx = rUse.left + rUse.width * 0.52;
-      cy = rUse.top + rUse.height * 0.45;
+  function clearPendingSelection() {
+    if (pendingRowEl) {
+      try { pendingRowEl.classList.remove("quoteItemSelected"); } catch (_) {}
     }
-    var ww = Math.max(1, rUse.width);
-    var hh = Math.max(1, rUse.height);
-    var fracX = Math.max(0, Math.min(1, (cx - rUse.left) / ww));
-    var fracY = Math.max(0, Math.min(1, (cy - rUse.top) / hh));
+    pendingQuote = null;
+    pendingRowEl = null;
+    stopPlacementWatch();
+  }
 
+  function insertQuoteToPs(item, options, onFlowEnd) {
+    options = options || {};
+    function end() {
+      if (typeof onFlowEnd === "function") {
+        try { onFlowEnd(); } catch (_) {}
+      }
+    }
+    if (!item) {
+      log("未选择台词：请先点击列表中的一条。");
+      end();
+      return;
+    }
     var payload = {
       page: item.page,
       paragraph: item.paragraph,
       text: item.text,
       segments: item.segments || [],
       anchorMode: "fraction",
-      fracX: fracX,
-      fracY: fracY,
-      sourceClientX: cx,
-      sourceClientY: cy
+      fracX: 0.5,
+      fracY: 0.5,
+      useCursorProbe: true
     };
-    var payloadText = encodeURIComponent(JSON.stringify(payload));
-    var script = 'WORD_IMPORT_CEP.insertBubbleText("' + escHostString(payloadText) + '","' + escHostString(repoRootHint) + '")';
-    callHost(script, function (result) {
-      if (result && result.indexOf("OK|") === 0) {
-        var info = decodePayload(result.slice(3)) || {};
-        var anchorMsg = "（按拖拽位置近似投放）";
-        if (info.anchorUsed === "selectionBubbleSnap") anchorMsg = "（按 PS 小选区吸附对白框）";
-        else if (info.anchorUsed === "bubbleSnap") anchorMsg = "（已吸附到识别对白框）";
-        else if (info.anchorUsed === "cursorProbe") anchorMsg = "（按系统鼠标坐标投放）";
-        else if (info.anchorUsed === "selectionCenter") anchorMsg = "（按 PS 选区中心精确投放）";
-        if (typeof info.detectedBubbles === "number") {
-          anchorMsg += "（候选框: " + info.detectedBubbles + "）";
+
+    if (options.directPlace) {
+      payload.placeAtCursorOnly = true;
+      if (options.probeSnapshot) payload.probeSnapshot = options.probeSnapshot;
+      // #region agent log
+      debugLog("H3", "client/main.js:insertQuoteToPs", "sending directPlace request", {
+        page: String(payload.page || ""),
+        paragraph: Number(payload.paragraph),
+        placeAtCursorOnly: !!payload.placeAtCursorOnly,
+        hasProbeSnapshot: !!payload.probeSnapshot,
+        probeCursorX: payload.probeSnapshot ? Number(payload.probeSnapshot.cursorX) : null,
+        probeCursorY: payload.probeSnapshot ? Number(payload.probeSnapshot.cursorY) : null,
+        probeClientL: payload.probeSnapshot ? Number(payload.probeSnapshot.clientL) : null,
+        probeClientT: payload.probeSnapshot ? Number(payload.probeSnapshot.clientT) : null,
+        probeClientR: payload.probeSnapshot ? Number(payload.probeSnapshot.clientR) : null,
+        probeClientB: payload.probeSnapshot ? Number(payload.probeSnapshot.clientB) : null
+      });
+      // #endregion
+      var payloadText0 = encodeURIComponent(JSON.stringify(payload));
+      var script0 =
+        'WORD_IMPORT_CEP.insertBubbleText("' +
+        escHostString(payloadText0) +
+        '","' +
+        escHostString(repoRootHint) +
+        '")';
+      callHost(script0, function (result0) {
+        // #region agent log
+        debugLog("H4", "client/main.js:insertQuoteToPs:directPlaceCallback", "host returned directPlace result", {
+          okPrefix: !!(result0 && result0.indexOf("OK|") === 0),
+          resultHead: String(result0 || "").slice(0, 160)
+        });
+        // #endregion
+        if (result0 && result0.indexOf("OK|") === 0) {
+          var info0 = decodePayload(result0.slice(3)) || {};
+          // #region agent log
+          debugLog("H8", "client/main.js:insertQuoteToPs:directPlaceCallback", "decoded host placement result", {
+            anchorUsed: String(info0.anchorUsed || ""),
+            anchorDocX: Number(info0.anchorDocX),
+            anchorDocY: Number(info0.anchorDocY),
+            x: Number(info0.x),
+            y: Number(info0.y),
+            debugAnchorSource: String(info0.debugAnchorSource || ""),
+            debugSamplerCount: info0.debugSamplerCount == null ? null : Number(info0.debugSamplerCount),
+            debugSamplerIndex: info0.debugSamplerIndex == null ? null : Number(info0.debugSamplerIndex),
+            debugSamplerX: info0.debugSamplerX == null ? null : Number(info0.debugSamplerX),
+            debugSamplerY: info0.debugSamplerY == null ? null : Number(info0.debugSamplerY),
+            debugProbeFromPayload: !!info0.debugProbeFromPayload,
+            debugProbeAvailable: !!info0.debugProbeAvailable,
+            debugPointFromProbe: !!info0.debugPointFromProbe,
+            debugProbeCursorX: info0.debugProbeCursorX == null ? null : Number(info0.debugProbeCursorX),
+            debugProbeCursorY: info0.debugProbeCursorY == null ? null : Number(info0.debugProbeCursorY),
+            debugScreenToDocFail: String(info0.debugScreenToDocFail || "")
+          });
+          // #endregion
+          var anchorMsg0 = "（按鼠标点击位置直投）";
+          if (info0.anchorUsed) anchorMsg0 += "（anchor: " + info0.anchorUsed + "）";
+          log("已投放到 PS: " + (info0.layerName || ("#" + item.page + "-" + item.paragraph)) + anchorMsg0);
+          if (String(info0.debugAnchorSource || "") === "colorSampler") {
+            log("锚点来源：已用颜色取样点坐标投放（缩放无关）。");
+          } else {
+            log("锚点来源：未检测到颜色取样点，已回退到画布点击映射。");
+          }
+          clearPendingSelection();
+          log("已取消当前对白选中。");
+        } else {
+          log("投放失败: " + (result0 || "UNKNOWN_ERROR"));
         }
-        if (info.bubbleSource) {
-          anchorMsg += "（来源: " + info.bubbleSource + "）";
-        }
-        log("已投放到 PS: " + (info.layerName || ("#" + item.page + "-" + item.paragraph)) + anchorMsg);
-        log(
-          "调试: sel=" + (!!info.debugSelInfo) +
-          ", rectPassed=" + (!!info.debugSelectionRectPassed) +
-          ", preferRect=" + (!!info.debugPreferSelectionRect) +
-          ", lockedRect=" + (!!info.debugLockedRect) +
-          ", anchor=" + (info.anchorUsed || "none") +
-          ", bubbleSource=" + (info.bubbleSource || "unknown") +
-          ", precomputedStatus=" + (info.precomputedStatus || "unknown") +
-          ", precomputedFile=" + (info.precomputedBubbleFile || "none")
-        );
-        if (info.precomputedTried && info.precomputedTried.length) {
-          log("预识别文件候选: " + info.precomputedTried.join(" | "));
-        }
-      } else {
-        log("投放失败: " + (result || "UNKNOWN_ERROR"));
+        end();
+      });
+      return;
+    }
+
+    var previewPayload = JSON.parse(JSON.stringify(payload));
+    previewPayload.previewCandidatesOnly = true;
+    previewPayload.candidateTopN = 5;
+    var previewText = encodeURIComponent(JSON.stringify(previewPayload));
+    var previewScript = 'WORD_IMPORT_CEP.insertBubbleText("' + escHostString(previewText) + '","' + escHostString(repoRootHint) + '")';
+    callHost(previewScript, function (previewResult) {
+      if (!previewResult || previewResult.indexOf("OK|") !== 0) {
+        log("获取候选气泡失败: " + (previewResult || "UNKNOWN_ERROR"));
+        debugLog("H8", "client/main.js:insertQuoteToPs:previewError", "preview call failed", {
+          result: String(previewResult || "")
+        });
+        end();
+        return;
       }
+      var previewInfo = decodePayload(previewResult.slice(3)) || {};
+      debugLog("H6", "client/main.js:insertQuoteToPs:previewOk", "preview result decoded", {
+        candidateCount: previewInfo && previewInfo.candidates ? previewInfo.candidates.length : 0,
+        detectedBubbles: previewInfo && previewInfo.detectedBubbles != null ? previewInfo.detectedBubbles : null,
+        precomputedStatus: previewInfo && previewInfo.precomputedStatus ? previewInfo.precomputedStatus : "",
+        bubbleSource: previewInfo && previewInfo.bubbleSource ? previewInfo.bubbleSource : ""
+      });
+      var picked = null;
+      if (options.autoPickNearest) {
+        var list = (previewInfo && previewInfo.candidates) ? previewInfo.candidates : [];
+        picked = list.length ? 0 : -1;
+      } else {
+        picked = pickBubbleCandidate(previewInfo);
+      }
+      if (picked === null) {
+        log("已取消本次投放。");
+        debugLog("H7", "client/main.js:insertQuoteToPs:cancelled", "user cancelled candidate pick", {});
+        end();
+        return;
+      }
+      if (picked === -1) {
+        if (options.autoPickNearest) {
+          log("本次点击附近未找到可用对白框，请重试或重新生成 mask。");
+          end();
+          return;
+        }
+        log("输入无效：请选择 1-" + ((previewInfo.candidates && previewInfo.candidates.length) || 0) + "。");
+        debugLog("H7", "client/main.js:insertQuoteToPs:invalid", "user input invalid for candidate range", {
+          candidateCount: previewInfo && previewInfo.candidates ? previewInfo.candidates.length : 0
+        });
+        end();
+        return;
+      }
+      payload.selectedBubbleIndex = picked;
+      payload.useCursorProbe = false;
+      payload.anchorMode = "docPoint";
+      if (isFinite(Number(previewInfo.hintDocX)) && isFinite(Number(previewInfo.hintDocY))) {
+        payload.docX = Number(previewInfo.hintDocX);
+        payload.docY = Number(previewInfo.hintDocY);
+      }
+      debugLog("H8", "client/main.js:insertQuoteToPs:finalPayload", "sending final insert payload", {
+        selectedBubbleIndex: payload.selectedBubbleIndex,
+        anchorMode: payload.anchorMode,
+        docX: payload.docX,
+        docY: payload.docY
+      });
+      var payloadText = encodeURIComponent(JSON.stringify(payload));
+      var script = 'WORD_IMPORT_CEP.insertBubbleText("' + escHostString(payloadText) + '","' + escHostString(repoRootHint) + '")';
+      callHost(script, function (result) {
+        if (result && result.indexOf("OK|") === 0) {
+          var info = decodePayload(result.slice(3)) || {};
+          var anchorMsg = "（按鼠标位置匹配对白框）";
+          if (info.anchorUsed === "selectionBubbleSnap") anchorMsg = "（按 PS 小选区吸附对白框）";
+          else if (info.anchorUsed === "bubbleSnap") anchorMsg = "（已吸附到识别对白框）";
+          else if (info.anchorUsed === "cursorProbe") anchorMsg = "（按系统鼠标坐标投放）";
+          else if (info.anchorUsed === "selectionCenter") anchorMsg = "（按 PS 选区中心精确投放）";
+          if (typeof info.detectedBubbles === "number") {
+            anchorMsg += "（候选框: " + info.detectedBubbles + "）";
+          }
+          if (info.bubbleSource) {
+            anchorMsg += "（来源: " + info.bubbleSource + "）";
+          }
+          if (info.maskPath) {
+            anchorMsg += "（mask: " + info.maskPath + "）";
+          }
+          log("已投放到 PS: " + (info.layerName || ("#" + item.page + "-" + item.paragraph)) + anchorMsg);
+          log(
+            "调试: anchor=" + (info.anchorUsed || "none") +
+            ", bubbleSource=" + (info.bubbleSource || "unknown") +
+            ", maskStatus=" + (info.maskStatus || "") +
+            ", maskPass=" + (info.maskPass || "")
+          );
+        } else {
+          log("投放失败: " + (result || "UNKNOWN_ERROR"));
+        }
+        end();
+      });
     });
   }
 
@@ -200,7 +662,7 @@
     if (!items.length) {
       var empty = document.createElement("div");
       empty.className = "quoteEmpty";
-      empty.textContent = "当前页无可拖拽台词。";
+      empty.textContent = "当前页无可选台词。";
       quoteList.appendChild(empty);
       return;
     }
@@ -208,7 +670,8 @@
       var it = items[i];
       var row = document.createElement("div");
       row.className = "quoteItem";
-      row.draggable = true;
+      row.setAttribute("role", "button");
+      row.tabIndex = 0;
 
       var meta = document.createElement("div");
       meta.className = "quoteMeta";
@@ -220,54 +683,54 @@
       text.textContent = it.text;
       row.appendChild(text);
 
-      row.addEventListener("dragstart", (function (item, el) {
-        return function (e) {
-          var dragText = sanitizeForDrag(item.text);
-          try { e.dataTransfer.setData("text/plain", dragText); } catch (_) {}
-          try { e.dataTransfer.effectAllowed = "copy"; } catch (_) {}
-          try { e.dataTransfer.dropEffect = "copy"; } catch (_) {}
-          try {
-            var p = quoteList.getBoundingClientRect();
-            lastDragPoint.x = p.left + p.width * 0.52;
-            lastDragPoint.y = p.top + p.height * 0.45;
-          } catch (_) {
-            lastDragPoint.x = NaN;
-            lastDragPoint.y = NaN;
+      (function (item, el) {
+        el.addEventListener("click", function () {
+          selectQuoteItem(item, el);
+        });
+        el.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            selectQuoteItem(item, el);
           }
-          el.classList.add("dragging");
-          log("开始拖拽: #" + item.page + " 段 " + item.paragraph);
-        };
-      })(it, row));
+        });
+      })(it, row);
 
-      row.addEventListener("drag", function (e) {
-        if (e && typeof e.clientX === "number" && typeof e.clientY === "number" && (e.clientX !== 0 || e.clientY !== 0)) {
-          lastDragPoint.x = e.clientX;
-          lastDragPoint.y = e.clientY;
-        }
-      });
-
-      row.addEventListener("dragend", (function (item, el) {
-        return function (e) {
-          el.classList.remove("dragging");
-          insertQuoteToPs(item, e);
-        };
-      })(it, row));
+      if (pendingQuote &&
+          String(pendingQuote.page) === String(it.page) &&
+          Number(pendingQuote.paragraph) === Number(it.paragraph)) {
+        row.classList.add("quoteItemSelected");
+        pendingRowEl = row;
+      }
 
       quoteList.appendChild(row);
     }
   }
 
   function reloadQuotes() {
+    debugLog("H1", "client/main.js:reloadQuotes:start", "reloadQuotes invoked", {
+      repoRootHint: String(repoRootHint || "")
+    });
     var script = 'WORD_IMPORT_CEP.listQuotes("' + escHostString(repoRootHint) + '")';
     callHost(script, function (result) {
+      debugLog("H2", "client/main.js:reloadQuotes:result", "listQuotes raw result", {
+        okPrefix: !!(result && result.indexOf("OK|") === 0),
+        resultHead: String(result || "").slice(0, 220)
+      });
       if (!result || result.indexOf("OK|") !== 0) {
         quoteState = { pages: [], defaultPage: "001" };
         renderPageOptions();
         renderQuoteList();
         log("读取台词失败: " + (result || "UNKNOWN_ERROR"));
+        debugLog("H3", "client/main.js:reloadQuotes:error", "listQuotes returned non-OK", {
+          result: String(result || "")
+        });
         return;
       }
       var payload = decodePayload(result.slice(3)) || {};
+      debugLog("H4", "client/main.js:reloadQuotes:payload", "decoded payload summary", {
+        defaultPage: String(payload.defaultPage || ""),
+        pagesCount: payload.pages && payload.pages.length ? payload.pages.length : 0
+      });
       var pages = payload.pages || [];
       var normalizedPages = [];
       for (var i = 0; i < pages.length; i++) {
@@ -326,6 +789,26 @@
   document.getElementById("btnOpenPanel").addEventListener("click", function () {
     runFromRepo("import_panel.jsx");
   });
+
+  try {
+    var titleEl = document.querySelector(".appTitle");
+    if (titleEl) {
+      titleEl.addEventListener("click", function () {
+        try {
+          titleTapCount++;
+          if (titleTapTimer) window.clearTimeout(titleTapTimer);
+          titleTapTimer = window.setTimeout(function () { titleTapCount = 0; }, 800);
+          if (titleTapCount >= 6) {
+            titleTapCount = 0;
+            if (devTools) {
+              devTools.style.display = (devTools.style.display === "none" || !devTools.style.display) ? "block" : "none";
+              log("开发者工具区已" + (devTools.style.display === "none" ? "隐藏" : "显示") + "。");
+            }
+          }
+        } catch (_) {}
+      });
+    }
+  } catch (_) {}
 
   document.getElementById("btnClearDialogues").addEventListener("click", function () {
     var ok = window.confirm(
@@ -438,46 +921,19 @@
     exportDocxToJsxdata();
   });
 
-  document.getElementById("btnGenBubbleBoxes").addEventListener("click", function () {
-    callHost('WORD_IMPORT_CEP.generateBubbleBoxesFile("' + escHostString(repoRootHint) + '")', function (result) {
+  document.getElementById("btnGenMasks").addEventListener("click", function () {
+    callHost('WORD_IMPORT_CEP.generateBubbleMasks("' + escHostString(repoRootHint) + '")', function (result) {
       if (!result || result.indexOf("OK|") !== 0) {
-        log("生成 bubble_boxes 失败: " + (result || "UNKNOWN_ERROR"));
+        log("生成 mask 失败: " + (result || "UNKNOWN_ERROR"));
         return;
       }
       var info = decodePayload(result.slice(3)) || {};
-      log("已生成预识别框: mask目录=" + (info.maskOutputPath || "unknown"));
-      log("已同步到工作目录: " + (info.targetPath || ""));
-      if (info.forcedPage) {
-        log("生成时已强制写入页码: #" + info.forcedPage);
-      }
-      if (info.shellOutput) {
-        log("生成日志: " + String(info.shellOutput).replace(/\s+/g, " ").trim());
-      }
-      refreshBubbleBoxesStatus();
-    });
-  });
-
-  document.getElementById("btnBindBubbleBoxes").addEventListener("click", function () {
-    callHost('WORD_IMPORT_CEP.bindBubbleBoxesFile("' + escHostString(repoRootHint) + '")', function (result) {
-      if (!result || result.indexOf("OK|") !== 0) {
-        log("绑定 bubble_boxes 失败: " + (result || "UNKNOWN_ERROR"));
-        return;
-      }
-      var info = decodePayload(result.slice(3)) || {};
-      log("已绑定 bubble_boxes: " + (info.targetPath || ""));
-      refreshBubbleBoxesStatus();
-    });
-  });
-
-  document.getElementById("btnClearBubbleBoxes").addEventListener("click", function () {
-    callHost('WORD_IMPORT_CEP.clearBubbleBoxesFile("' + escHostString(repoRootHint) + '")', function (result) {
-      if (!result || result.indexOf("OK|") !== 0) {
-        log("清除 bubble_boxes 失败: " + (result || "UNKNOWN_ERROR"));
-        return;
-      }
-      var info = decodePayload(result.slice(3)) || {};
-      log("已清除 bubble_boxes 绑定: " + (info.targetPath || ""));
-      refreshBubbleBoxesStatus();
+      log("已生成黑白 mask：输出目录=" + (info.maskDir || "unknown"));
+      if (info.vizDir) log("可视化检查图目录: " + info.vizDir);
+      if (info.shellOutput)
+        log("mask 日志: " + String(info.shellOutput).replace(/\s+/g, " ").trim());
+      if (info.launcher === "powershell-visible-detached")
+        log("提示：已在独立 PowerShell 窗口中运行；处理完成前请勿关闭该窗口。");
     });
   });
 
@@ -486,13 +942,16 @@
   });
 
   pageSelect.addEventListener("change", function () {
+    stopPlacementWatch();
+    pendingQuote = null;
+    pendingRowEl = null;
     renderQuoteList();
   });
 
   initRepoRootHint();
+  bootstrapCursorProbe();
   renderPageOptions();
   renderQuoteList();
-  refreshBubbleBoxesStatus();
   reloadQuotes();
-  log("漫画汉化导入助手（CEP）已启动。");
+  log("漫画汉化导入助手（CEP）已启动。build=" + BUILD_ID);
 })();

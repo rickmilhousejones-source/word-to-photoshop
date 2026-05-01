@@ -14,7 +14,12 @@ Settings are read from settings.json beside this script.
     }
 
     if (app.documents.length === 0) {
-      app.documents.add(1920, 1080, 72, "Word Import");
+      try {
+        app.documents.add(1920, 1080, 72, "Word Import");
+      } catch (_) {
+        alert("请先打开一个 PSD 文档后再导入。");
+        return;
+      }
     }
 
     var scriptFile = new File($.fileName);
@@ -54,7 +59,7 @@ Settings are read from settings.json beside this script.
 
   function buildDefaultContext() {
     if (app.name !== "Adobe Photoshop") throw new Error("请在 Photoshop 中运行此脚本。");
-    if (app.documents.length === 0) app.documents.add(1920, 1080, 72, "Word Import");
+    if (app.documents.length === 0) throw new Error("请先打开 PSD 文档。");
 
     var doc = app.activeDocument;
     var scriptFile = new File($.fileName);
@@ -105,6 +110,15 @@ Settings are read from settings.json beside this script.
     var baseProbeLayer = createTextLayer(doc, cfg, selection.page || "000", 0);
     var font = resolveFonts(cfg, baseProbeLayer);
     baseProbeLayer.remove();
+    if (logger) {
+      try {
+        logger(
+          "字体解析: regular=" + String(font && font.regular ? font.regular.postScriptName : "") +
+          ", bold=" + String(font && font.bold ? font.bold.postScriptName : "") +
+          ", boldMode=" + String(font && font.hasRealBold ? "realBold" : "fauxBoldFallback")
+        );
+      } catch (_) {}
+    }
 
     var result = null;
     runWithPixelUnits(function () {
@@ -146,7 +160,8 @@ Settings are read from settings.json beside this script.
       bubbleDetectMinArea: 18000,
       bubbleDetectMaxAreaRatio: 0.92,
       bubbleSnapMaxDistance: 720,
-      bubbleUsePrecomputed: true,
+      bubbleUsePrecomputed: false,
+      bubbleUseMaskDir: true,
       bubblePrecomputedFileName: "bubble_boxes.json",
       bubblePrecomputedPerDataFile: true,
       rememberLastDataFile: true,
@@ -859,10 +874,42 @@ Settings are read from settings.json beside this script.
     if (!bold) bold = regular;
 
     if (!regular || !regular.postScriptName) {
-      throw new Error("未找到可用字体，请确认 Photoshop 可访问到微软雅黑。");
+      throw new Error("未找到可用字体，请确认 Photoshop 可访问到已安装字体。");
     }
+    var hasRealBold = !!(bold && regular && bold.postScriptName && regular.postScriptName && bold.postScriptName !== regular.postScriptName);
+    var out = {
+      regular: regular,
+      bold: bold,
+      hasRealBold: hasRealBold,
+      fauxBoldFallbackActive: !hasRealBold && !!(cfg && cfg.useFauxBoldFallback)
+    };
+    try { $.global.WORD_IMPORT_LAST_FONT_RESOLVE = out; } catch (_) {}
+    return out;
+  }
 
-    return { regular: regular, bold: bold };
+  function _dbgAppend(hypothesisId, location, message, data) {
+    try {
+      var scriptFile = new File($.fileName);
+      var repoRoot = scriptFile.parent;
+      var f = new File(repoRoot.fsName + "/debug-2cdb9a.log");
+      f.encoding = "UTF-8";
+      if (!f.open("a")) return;
+      try {
+        var obj = {
+          sessionId: "2cdb9a",
+          runId: "font-dropdown-debug",
+          hypothesisId: String(hypothesisId || ""),
+          location: String(location || ""),
+          message: String(message || ""),
+          data: data || {},
+          timestamp: new Date().getTime()
+        };
+        var line = (typeof JSON !== "undefined" && JSON && JSON.stringify) ? JSON.stringify(obj) : obj.toSource();
+        f.writeln(line);
+      } finally {
+        f.close();
+      }
+    } catch (_) {}
   }
 
   function findFirstExistingPostScript(candidates) {
@@ -1191,6 +1238,237 @@ Settings are read from settings.json beside this script.
     return { candidates: [], source: "", loaded: false, status: status, tried: tried };
   }
 
+  function quoteForCmdPath(raw) {
+    var s = String(raw == null ? "" : raw);
+    return "\"" + s.replace(/"/g, "\"\"") + "\"";
+  }
+
+  function getRepoRootForMaskTools() {
+    try {
+      var envPath = $.getenv("WORD_IMPORT_REPO_PATH");
+      envPath = String(envPath == null ? "" : envPath);
+      if (envPath.length && envPath.charCodeAt(0) === 0xFEFF) envPath = envPath.substring(1);
+      envPath = envPath.replace(/\r/g, "").replace(/\n/g, "").replace(/^\s+|\s+$/g, "");
+      while (envPath.length && (envPath.charAt(0) === "\"" || envPath.charAt(0) === "'")) envPath = envPath.substring(1);
+      while (envPath.length && (envPath.charAt(envPath.length - 1) === "\"" || envPath.charAt(envPath.length - 1) === "'")) {
+        envPath = envPath.substring(0, envPath.length - 1);
+      }
+      if (envPath) {
+        var ef = new Folder(envPath);
+        if (ef.exists) return ef;
+      }
+    } catch (_) {}
+    try {
+      var scriptFile = new File($.fileName);
+      return scriptFile.parent;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function guessPageFromMaskStem(stem) {
+    try {
+      var s = String(stem || "");
+      var re = /0*([0-9]{1,4})(?=[^0-9]*$)/g;
+      var last = null;
+      var m;
+      while ((m = re.exec(s))) last = m;
+      if (last && last[1] != null) return normalizePageNumber(last[1]);
+    } catch (_) {}
+    return null;
+  }
+
+  function findMaskFileForPage(doc, pageNorm) {
+    try {
+      if (!doc || !doc.fullName || !doc.fullName.parent) return null;
+      var maskFolder = new Folder(doc.fullName.parent.fsName + "/mask");
+      if (!maskFolder.exists) return null;
+
+      var tryNames = [
+        String(pageNorm) + ".png",
+        String(pageNorm) + ".jpg",
+        String(pageNorm) + ".jpeg",
+        String(pageNorm) + ".webp"
+      ];
+      var n = parseInt(String(pageNorm), 10);
+      if (!isNaN(n)) {
+        tryNames.push(String(n) + ".png");
+        tryNames.push(String(n) + ".jpg");
+      }
+      for (var t = 0; t < tryNames.length; t++) {
+        var tf = new File(maskFolder.fsName + "/" + tryNames[t]);
+        if (tf.exists) return tf;
+      }
+
+      var files = maskFolder.getFiles();
+      if (!files) return null;
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        if (!(f instanceof File)) continue;
+        var nm = String(f.name || "");
+        if (!/\.(png|jpg|jpeg|webp|bmp|tif|tiff)$/i.test(nm)) continue;
+        var stem = nm.replace(/\.[^\.]+$/, "");
+        if (!stem || stem === "_viz") continue;
+        if (String(stem).indexOf("_viz") === 0) continue;
+        var guessed = guessPageFromMaskStem(stem);
+        if (guessed && String(guessed) === String(pageNorm)) return f;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function runMaskToBoxes(repoRoot, maskFile, outJsonFile) {
+    try {
+      var py = new File(repoRoot.fsName + "/tools/mask_to_boxes.py");
+      if (!py.exists) return "no_script";
+      var tempDir = Folder.temp;
+      var runId = String(new Date().getTime());
+      var logFile = new File(tempDir.fsName + "/word_import_mask_boxes_" + runId + ".log");
+      var launchers = ["py", "python", "python3"];
+      var scriptArgs =
+        quoteForCmdPath(py.fsName) +
+        " --mask " + quoteForCmdPath(maskFile.fsName) +
+        " --out " + quoteForCmdPath(outJsonFile.fsName);
+      for (var li = 0; li < launchers.length; li++) {
+        var launcher = launchers[li];
+        var runner = new File(tempDir.fsName + "/word_import_mask_run_" + launcher + "_" + runId + ".cmd");
+        runner.encoding = "UTF-8";
+        if (!runner.open("w")) continue;
+        try {
+          runner.write("@echo off\r\n");
+          runner.write(launcher + " " + scriptArgs + " > " + quoteForCmdPath(logFile.fsName) + " 2>&1\r\n");
+          runner.write("exit /b %errorlevel%\r\n");
+        } finally {
+          runner.close();
+        }
+        try {
+          if (outJsonFile.exists) outJsonFile.remove();
+        } catch (_) {}
+        app.system("cmd /d /c " + quoteForCmdPath(runner.fsName));
+        if (outJsonFile.exists) return "ok";
+      }
+    } catch (_) {}
+    return "failed";
+  }
+
+  function parseMaskJsonToResult(outJson, maskFile) {
+    var maskPathStr = String(maskFile.fsName || "");
+    try {
+      var raw = readTextFile(outJson);
+      var parsed = parseJSONLoose(raw);
+      if (!parsed || !parsed.boxes) {
+        return {
+          candidates: [],
+          source: maskPathStr,
+          loaded: false,
+          status: "maskJsonInvalid",
+          tried: [maskPathStr],
+          maskPath: maskPathStr,
+          maskPass: ""
+        };
+      }
+      var out = [];
+      for (var j = 0; j < parsed.boxes.length; j++) {
+        var n = normalizePrecomputedBubbleRect(parsed.boxes[j], j);
+        if (n) out.push(n);
+      }
+      return {
+        candidates: out,
+        source: maskPathStr,
+        loaded: out.length > 0,
+        status: out.length ? "loaded" : "maskEmpty",
+        tried: [maskPathStr],
+        maskPath: maskPathStr,
+        maskPass: parsed.pass ? String(parsed.pass) : ""
+      };
+    } catch (e) {
+      return {
+        candidates: [],
+        source: maskPathStr,
+        loaded: false,
+        status: "maskReadErr",
+        tried: [maskPathStr],
+        maskPath: maskPathStr,
+        maskPass: ""
+      };
+    }
+  }
+
+  function loadMaskBubblesForPage(doc, cfg, pageNorm) {
+    var empty = {
+      candidates: [],
+      source: "",
+      loaded: false,
+      status: "disabled",
+      tried: [],
+      maskPath: "",
+      maskPass: ""
+    };
+    if (!cfg || cfg.bubbleUseMaskDir === false) {
+      empty.status = "disabled";
+      return empty;
+    }
+    if (!doc || !doc.fullName || !doc.fullName.parent) {
+      empty.status = "noDocPath";
+      return empty;
+    }
+
+    var maskFile = findMaskFileForPage(doc, pageNorm);
+    if (!maskFile || !maskFile.exists) {
+      empty.status = "maskNotFound";
+      empty.tried = [String(pageNorm)];
+      return empty;
+    }
+
+    var repoRoot = getRepoRootForMaskTools();
+    if (!repoRoot) {
+      empty.status = "noRepo";
+      empty.maskPath = String(maskFile.fsName);
+      empty.tried = [String(maskFile.fsName)];
+      return empty;
+    }
+
+    var tempDir = Folder.temp;
+    var modKey = "0";
+    try {
+      var md = maskFile.modified;
+      if (md && md.getTime) modKey = String(md.getTime());
+      else modKey = String(md || "0");
+    } catch (_) {
+      modKey = String(new Date().getTime());
+    }
+    var cacheKey = String(pageNorm) + "|" + String(maskFile.fsName) + "|" + modKey;
+    try {
+      if (!$.global.WORD_IMPORT_MASK_BOX_CACHE) $.global.WORD_IMPORT_MASK_BOX_CACHE = {};
+      var hit = $.global.WORD_IMPORT_MASK_BOX_CACHE[cacheKey];
+      if (hit && hit.jsonPath) {
+        var jf = new File(String(hit.jsonPath));
+        if (jf.exists) return parseMaskJsonToResult(jf, maskFile);
+      }
+    } catch (_) {}
+
+    var outJson = new File(tempDir.fsName + "/word_import_mask_boxes_page_" + String(pageNorm) + "_" + modKey + ".json");
+    var run = runMaskToBoxes(repoRoot, maskFile, outJson);
+    if (run !== "ok" || !outJson.exists) {
+      return {
+        candidates: [],
+        source: "",
+        loaded: false,
+        status: "maskPythonFailed",
+        tried: [String(maskFile.fsName)],
+        maskPath: String(maskFile.fsName),
+        maskPass: ""
+      };
+    }
+
+    var result = parseMaskJsonToResult(outJson, maskFile);
+    try {
+      if (!$.global.WORD_IMPORT_MASK_BOX_CACHE) $.global.WORD_IMPORT_MASK_BOX_CACHE = {};
+      $.global.WORD_IMPORT_MASK_BOX_CACHE[cacheKey] = { jsonPath: String(outJson.fsName) };
+    } catch (_) {}
+    return result;
+  }
+
   function buildParagraphTextAndRanges(para, font, cfg) {
     var full = "";
     var ranges = [];
@@ -1434,6 +1712,12 @@ Settings are read from settings.json beside this script.
     var scriptFile = new File($.fileName);
     var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
     var cfg = loadSettings(settingsFile);
+    _dbgAppend("H5", "import_to_photoshop.jsx:insertBubbleParagraphCEP", "loaded cfg font candidates", {
+      regular0: cfg && cfg.fontRegularCandidates ? cfg.fontRegularCandidates[0] : null,
+      bold0: cfg && cfg.fontBoldCandidates ? cfg.fontBoldCandidates[0] : null,
+      fontHasRealBold: cfg ? !!cfg.fontHasRealBold : null,
+      settingsPath: String(settingsFile.fsName || "")
+    });
 
     var anchorMode = payload && payload.anchorMode ? String(payload.anchorMode) : "fraction";
     var docX = payload && payload.docX != null ? Number(payload.docX) : NaN;
@@ -1456,10 +1740,11 @@ Settings are read from settings.json beside this script.
     } else if (payload.text != null && String(payload.text).length) {
       para.segments.push({ text: String(payload.text), bold: false, italic: false });
     } else {
-      throw new Error("拖拽内容为空");
+      throw new Error("台词内容为空");
     }
 
     var out = {};
+    var previewResult = null;
 
     runWithPixelUnits(function () {
       var bounds = getLayoutBounds(doc, cfg);
@@ -1469,6 +1754,7 @@ Settings are read from settings.json beside this script.
       var inset = 8;
       var x, y;
       var bubblePick = null;
+      var placeAtCursorOnly = !!(payload && payload.placeAtCursorOnly);
       if (anchorMode === "docPoint" && !isNaN(docX) && !isNaN(docY)) {
         x = docX - bw / 2;
         y = docY - bh / 2;
@@ -1492,20 +1778,105 @@ Settings are read from settings.json beside this script.
         y = cy - bh / 2;
       }
 
-      var precomputed = loadPrecomputedBubblesForPage(doc, cfg, pageNorm);
-      var bubbleCandidates = (precomputed && precomputed.candidates && precomputed.candidates.length)
-        ? precomputed.candidates.slice(0)
-        : detectBubbleCandidates(doc, cfg);
-      var selectionBubble = normalizeSelectionRect(payload && payload.selectionRect ? payload.selectionRect : null);
-      if (selectionBubble) {
-        bubbleCandidates.unshift(selectionBubble);
+      // Direct placement mode: do NOT rely on bubble recognition / snapping.
+      // Useful when recognition is unstable; place text box at cursor point only.
+      var maskPack = null;
+      var bubbleCandidates = [];
+      var bubbleSourceKind = "direct";
+      var maskPathForDebug = "";
+      var maskStatusForDebug = "";
+      var maskPassForDebug = "";
+      var bubbleTriedPaths = [];
+
+      if (!placeAtCursorOnly) {
+        maskPack = loadMaskBubblesForPage(doc, cfg, pageNorm);
+        bubbleSourceKind = "layerDetect";
+
+        if (maskPack && maskPack.candidates && maskPack.candidates.length) {
+          bubbleCandidates = maskPack.candidates.slice(0);
+          bubbleSourceKind = "mask";
+          maskPathForDebug = maskPack.maskPath || "";
+          maskStatusForDebug = maskPack.status || "";
+          maskPassForDebug = maskPack.maskPass || "";
+          bubbleTriedPaths = maskPack.tried || [];
+        } else {
+          bubbleCandidates = detectBubbleCandidates(doc, cfg);
+          if (maskPack) {
+            maskPathForDebug = maskPack.maskPath || "";
+            maskStatusForDebug = maskPack.status || "";
+            maskPassForDebug = maskPack.maskPass || "";
+            bubbleTriedPaths = maskPack.tried || [];
+          }
+        }
+        var selectionBubble = normalizeSelectionRect(payload && payload.selectionRect ? payload.selectionRect : null);
+        if (selectionBubble) {
+          bubbleCandidates.unshift(selectionBubble);
+        }
+        if (selectionBubble && payload && payload.preferSelectionRect) {
+          bubblePick = { idx: 0, d2: 0, candidate: selectionBubble };
+        } else {
+          bubblePick = pickNearestBubble(bubbleCandidates, isNaN(docX) ? (x + bw / 2) : docX, isNaN(docY) ? (y + bh / 2) : docY, cfg);
+        }
       }
-      if (selectionBubble && payload && payload.preferSelectionRect) {
-        bubblePick = { idx: 0, d2: 0, candidate: selectionBubble };
-      } else {
-        bubblePick = pickNearestBubble(bubbleCandidates, isNaN(docX) ? (x + bw / 2) : docX, isNaN(docY) ? (y + bh / 2) : docY, cfg);
+      var hintX = isNaN(docX) ? (x + bw / 2) : docX;
+      var hintY = isNaN(docY) ? (y + bh / 2) : docY;
+      var rankedCandidates = [];
+      for (var ci = 0; ci < bubbleCandidates.length; ci++) {
+        var c0 = bubbleCandidates[ci];
+        var dx0 = Number(c0.centerX) - hintX;
+        var dy0 = Number(c0.centerY) - hintY;
+        rankedCandidates.push({
+          idx: ci,
+          d2: dx0 * dx0 + dy0 * dy0,
+          candidate: c0
+        });
       }
-      if (bubblePick && bubblePick.candidate) {
+      rankedCandidates.sort(function (a, b) { return a.d2 - b.d2; });
+      var topN = Number(payload && payload.candidateTopN != null ? payload.candidateTopN : 5);
+      if (!isFinite(topN) || topN < 1) topN = 5;
+      if (topN > 20) topN = 20;
+      var topCandidates = rankedCandidates.slice(0, topN);
+      var selectedRank = Number(payload && payload.selectedBubbleIndex != null ? payload.selectedBubbleIndex : NaN);
+      if (isFinite(selectedRank) && selectedRank >= 0 && selectedRank < topCandidates.length) {
+        bubblePick = topCandidates[selectedRank];
+      }
+      if (payload && payload.returnBubbleCandidates) {
+        var previewList = [];
+        for (var pi = 0; pi < topCandidates.length; pi++) {
+          var rc = topCandidates[pi];
+          var c1 = rc.candidate || {};
+          previewList.push({
+            rank: pi,
+            distancePx: Math.sqrt(Math.max(0, rc.d2)),
+            left: c1.left,
+            top: c1.top,
+            right: c1.right,
+            bottom: c1.bottom,
+            centerX: c1.centerX,
+            centerY: c1.centerY,
+            area: c1.area,
+            layerName: c1.layerName || ""
+          });
+        }
+        previewResult = {
+          previewOnly: true,
+          page: pageNorm,
+          paragraph: paraIx,
+          bubbleSource: bubbleSourceKind,
+          maskPath: maskPathForDebug,
+          maskStatus: maskStatusForDebug,
+          maskPass: maskPassForDebug,
+          precomputedBubbleFile: "",
+          precomputedStatus: maskStatusForDebug || "n/a",
+          precomputedTried: bubbleTriedPaths,
+          hintDocX: hintX,
+          hintDocY: hintY,
+          detectedBubbles: bubbleCandidates ? bubbleCandidates.length : 0,
+          candidates: previewList
+        };
+        return;
+      }
+      if (!placeAtCursorOnly && bubblePick && bubblePick.candidate) {
         var pad = Number(cfg && cfg.bubblePaddingPx != null ? cfg.bubblePaddingPx : 18);
         if (!isFinite(pad) || pad < 0) pad = 18;
         var c = bubblePick.candidate;
@@ -1570,11 +1941,19 @@ Settings are read from settings.json beside this script.
       out.boundsLeft = bounds.left;
       out.boundsTop = bounds.top;
       out.detectedBubbles = bubbleCandidates ? bubbleCandidates.length : 0;
-      out.bubbleSource = (precomputed && precomputed.loaded) ? "precomputed" : "layerDetect";
-      out.precomputedBubbleFile = (precomputed && precomputed.source) ? precomputed.source : "";
-      out.precomputedStatus = (precomputed && precomputed.status) ? precomputed.status : "unknown";
-      out.precomputedTried = (precomputed && precomputed.tried) ? precomputed.tried : [];
-      if (bubblePick && bubblePick.candidate) {
+      out.bubbleSource = bubbleSourceKind;
+      out.maskPath = maskPathForDebug;
+      out.maskStatus = maskStatusForDebug;
+      out.maskPass = maskPassForDebug;
+      out.precomputedBubbleFile = "";
+      out.precomputedStatus = "";
+      out.precomputedTried = bubbleTriedPaths;
+      out.fontRegularPostScriptName = String(font && font.regular ? font.regular.postScriptName : "");
+      out.fontBoldPostScriptName = String(font && font.bold ? font.bold.postScriptName : "");
+      out.fontBoldMode = font && font.hasRealBold ? "realBold" : "fauxBoldFallback";
+      if (placeAtCursorOnly) {
+        out.anchorUsed = "cursorDirect";
+      } else if (bubblePick && bubblePick.candidate) {
         out.anchorUsed = "bubbleSnap";
         out.snapBubbleLayerName = bubblePick.candidate.layerName;
         if (bubblePick.candidate.layerName === "__selectionRect__") {
@@ -1583,6 +1962,7 @@ Settings are read from settings.json beside this script.
       }
     });
 
+    if (previewResult) return previewResult;
     return out;
   }
 
