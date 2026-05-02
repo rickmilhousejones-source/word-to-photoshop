@@ -4,10 +4,242 @@ if (!$.global.WORD_IMPORT_CEP) {
   $.global.WORD_IMPORT_CEP = {};
 }
 
-$.global.WORD_IMPORT_CEP.BUILD_ID = "2026-05-01T13:00+08 directPlace-v1";
+$.global.WORD_IMPORT_CEP.BUILD_ID = "2026-05-02T12:00+08 cep-v1.1";
 
 $.global.WORD_IMPORT_CEP.ping = function () {
   return "PONG|Photoshop CEP Host Ready|build=" + ($.global.WORD_IMPORT_CEP.BUILD_ID || "");
+};
+
+/**
+ * Fetch remote JSON (e.g. release-channel.json) when CEP fetch is unavailable.
+ * @param {string} urlEncoded encodeURIComponent(remoteUrl)
+ * @returns {string} OK|encodeURIComponent(body) or ERR|...
+ */
+$.global.WORD_IMPORT_CEP.checkRemoteUpdate = function (urlEncoded) {
+  try {
+    var url = "";
+    try {
+      url = decodeURIComponent(String(urlEncoded || ""));
+    } catch (_) {
+      url = String(urlEncoded || "");
+    }
+    url = $.global.WORD_IMPORT_CEP._sanitizePathText(url);
+    if (!url || url.indexOf("http") !== 0) return "ERR|bad_url";
+
+    var runId = new Date().getTime();
+    var outFile = new File(Folder.temp.fsName + "/word_import_update_" + runId + ".json");
+    var ps1 = new File(Folder.temp.fsName + "/word_import_fetch_update_" + runId + ".ps1");
+    ps1.encoding = "UTF-8";
+    var urlLit = $.global.WORD_IMPORT_CEP._quoteForPs1Sq(url);
+    var outLit = $.global.WORD_IMPORT_CEP._quoteForPs1Sq(outFile.fsName);
+    if (!ps1.open("w")) return "ERR|temp_ps1";
+    try {
+      ps1.write("$ErrorActionPreference='Stop'\r\n");
+      ps1.write("$u='" + urlLit + "'\r\n");
+      ps1.write("$o='" + outLit + "'\r\n");
+      ps1.write(
+        "try {\r\n" +
+          "  $r = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 25\r\n" +
+          "  [System.IO.File]::WriteAllText($o, $r.Content, [System.Text.UTF8Encoding]::new($false))\r\n" +
+          "  Write-Output 'OK'\r\n" +
+          "} catch {\r\n" +
+          "  $m = ($_.Exception.Message + '') -replace '[\\r\\n]',' '\r\n" +
+          "  [System.IO.File]::WriteAllText($o, ('CHANNEL_FAIL:' + $m), [System.Text.UTF8Encoding]::new($false))\r\n" +
+          "  Write-Output 'WROTE_ERR'\r\n" +
+          "}\r\n"
+      );
+    } finally {
+      ps1.close();
+    }
+    var cmd =
+      "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " +
+      $.global.WORD_IMPORT_CEP._quoteForCmd(ps1.fsName);
+    String(app.system(cmd) || "");
+    try {
+      ps1.remove();
+    } catch (_) {}
+    if (!outFile.exists) return "ERR|no_output_file";
+    outFile.encoding = "UTF-8";
+    var raw = "";
+    if (!outFile.open("r")) return "ERR|read_fail";
+    try {
+      raw = outFile.read();
+    } finally {
+      outFile.close();
+    }
+    try {
+      outFile.remove();
+    } catch (_) {}
+    if (raw.length && raw.charCodeAt(0) === 0xFEFF) raw = raw.substring(1);
+    raw = String(raw || "").replace(/^\s+|\s+$/g, "");
+    if (!raw) return "ERR|empty_body";
+    if (raw.indexOf("CHANNEL_FAIL:") === 0) {
+      return "ERR|" + raw.substring(14);
+    }
+    return "OK|" + encodeURIComponent(raw);
+  } catch (e) {
+    return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
+  }
+};
+
+/**
+ * Download a release zip (HTTPS only, github.com / raw.githubusercontent.com).
+ * Saves under %USERPROFILE%\\Downloads. Returns OK|_encodeJSON({ savedPath, folder }).
+ */
+$.global.WORD_IMPORT_CEP.downloadReleaseZip = function (urlEncoded, suggestedLeafEncoded) {
+  try {
+    var url = "";
+    try {
+      url = decodeURIComponent(String(urlEncoded || ""));
+    } catch (_) {
+      url = String(urlEncoded || "");
+    }
+    url = $.global.WORD_IMPORT_CEP._sanitizePathText(url);
+    if (url.indexOf("https://") !== 0) return "ERR|https_only";
+    var allowed =
+      url.indexOf("https://github.com/") === 0 ||
+      url.indexOf("https://raw.githubusercontent.com/") === 0 ||
+      url.indexOf("https://gitee.com/") === 0 ||
+      url.indexOf("https://cdn.jsdelivr.net/") === 0;
+    if (!allowed) return "ERR|host_not_allowed";
+
+    var leafHint = "";
+    try {
+      leafHint = decodeURIComponent(String(suggestedLeafEncoded || ""));
+    } catch (_) {
+      leafHint = String(suggestedLeafEncoded || "");
+    }
+    leafHint = $.global.WORD_IMPORT_CEP._sanitizePathText(leafHint);
+
+    var runId = new Date().getTime();
+    var resultPath = Folder.temp.fsName + "/word_import_dl_result_" + runId + ".json";
+    var ps1 = new File(Folder.temp.fsName + "/word_import_dl_" + runId + ".ps1");
+    ps1.encoding = "UTF-8";
+    var urlLit = $.global.WORD_IMPORT_CEP._quoteForPs1Sq(url);
+    var resultLit = $.global.WORD_IMPORT_CEP._quoteForPs1Sq(resultPath);
+    var hintLit = $.global.WORD_IMPORT_CEP._quoteForPs1Sq(leafHint);
+    if (!ps1.open("w")) return "ERR|temp_ps1";
+    try {
+      ps1.write("$ErrorActionPreference='Stop'\r\n");
+      ps1.write("$u='" + urlLit + "'\r\n");
+      ps1.write("$resultPath='" + resultLit + "'\r\n");
+      ps1.write("$hint='" + hintLit + "'\r\n");
+      ps1.write(
+        "$downloads = Join-Path $env:USERPROFILE 'Downloads'\r\n" +
+          "if (-not (Test-Path -LiteralPath $downloads)) { New-Item -ItemType Directory -Path $downloads -Force | Out-Null }\r\n" +
+          "$leaf = $hint\r\n" +
+          "if (-not $leaf) {\r\n" +
+          "  try { $leaf = [System.IO.Path]::GetFileName(([uri]$u).AbsolutePath) } catch { $leaf = '' }\r\n" +
+          "}\r\n" +
+          "if (-not $leaf -or $leaf -notmatch '\\.(zip|ZIP)$') { $leaf = 'word-to-photoshop-update.zip' }\r\n" +
+          "$leaf = ($leaf -replace '[^a-zA-Z0-9._\\-]', '_')\r\n" +
+          "$dest = Join-Path $downloads $leaf\r\n" +
+          "if (Test-Path -LiteralPath $dest) {\r\n" +
+          "  $stem = [System.IO.Path]::GetFileNameWithoutExtension($dest)\r\n" +
+          "  $ext = [System.IO.Path]::GetExtension($dest)\r\n" +
+          "  $dest = Join-Path $downloads ($stem + '_' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmss') + $ext)\r\n" +
+          "}\r\n" +
+          "try {\r\n" +
+          "  Invoke-WebRequest -Uri $u -OutFile $dest -UseBasicParsing -TimeoutSec 300\r\n" +
+          "  $folder = Split-Path -Parent $dest\r\n" +
+          "  @{ ok = $true; savedPath = $dest; folder = $folder } | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8\r\n" +
+          "  Write-Output 'OK'\r\n" +
+          "} catch {\r\n" +
+          "  @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8\r\n" +
+          "  Write-Output ('ERR|' + $_.Exception.Message)\r\n" +
+          "}\r\n"
+      );
+    } finally {
+      ps1.close();
+    }
+    var cmd =
+      "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " +
+      $.global.WORD_IMPORT_CEP._quoteForCmd(ps1.fsName);
+    String(app.system(cmd) || "");
+    try {
+      ps1.remove();
+    } catch (_) {}
+
+    var rf = new File(resultPath);
+    if (!rf.exists) return "ERR|no_result";
+    rf.encoding = "UTF-8";
+    var raw = "";
+    if (!rf.open("r")) return "ERR|read_result";
+    try {
+      raw = rf.read();
+    } finally {
+      rf.close();
+    }
+    try {
+      rf.remove();
+    } catch (_) {}
+    if (raw.length && raw.charCodeAt(0) === 0xFEFF) raw = raw.substring(1);
+    raw = String(raw || "").replace(/^\s+|\s+$/g, "");
+    var obj = null;
+    try {
+      if (typeof JSON !== "undefined" && JSON && JSON.parse) obj = JSON.parse(raw);
+      else obj = eval("(" + raw + ")");
+    } catch (e2) {
+      return "ERR|bad_result_json";
+    }
+    if (!obj || obj.ok !== true) return "ERR|" + String(obj && obj.error ? obj.error : "download_failed");
+    return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON({ savedPath: obj.savedPath, folder: obj.folder });
+  } catch (e) {
+    return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
+  }
+};
+
+/** Open a folder in Explorer (UTF-8 path via PowerShell). */
+$.global.WORD_IMPORT_CEP.openFolderInExplorer = function (folderEncoded) {
+  try {
+    var folder = "";
+    try {
+      folder = decodeURIComponent(String(folderEncoded || ""));
+    } catch (_) {
+      folder = String(folderEncoded || "");
+    }
+    folder = $.global.WORD_IMPORT_CEP._sanitizePathText(folder);
+    if (!folder) return "ERR|empty_folder";
+    var runId = new Date().getTime();
+    var ps1 = new File(Folder.temp.fsName + "/word_import_openfolder_" + runId + ".ps1");
+    ps1.encoding = "UTF-8";
+    var flit = $.global.WORD_IMPORT_CEP._quoteForPs1Sq(folder);
+    if (!ps1.open("w")) return "ERR|temp_ps1";
+    try {
+      ps1.write("$ErrorActionPreference='Stop'\r\n");
+      ps1.write("$d='" + flit + "'\r\n");
+      ps1.write("if (-not (Test-Path -LiteralPath $d)) { throw 'folder_missing' }\r\n");
+      ps1.write("Invoke-Item -LiteralPath $d\r\n");
+    } finally {
+      ps1.close();
+    }
+    var cmd =
+      "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " +
+      $.global.WORD_IMPORT_CEP._quoteForCmd(ps1.fsName);
+    app.system(cmd);
+    try {
+      ps1.remove();
+    } catch (_) {}
+    return "OK|opened";
+  } catch (e3) {
+    return "ERR|" + e3.message;
+  }
+};
+
+/** Open https URL in default browser (CEP fallback when cep.util is missing). */
+$.global.WORD_IMPORT_CEP.openUrlInDefaultBrowser = function (urlRaw) {
+  try {
+    var u = String(urlRaw == null ? "" : urlRaw).replace(/\r|\n/g, "");
+    if (!u || u.indexOf("http") !== 0) return "ERR|bad_url";
+    var inner = "Start-Process -FilePath '" + $.global.WORD_IMPORT_CEP._quoteForPs1Sq(u) + "'";
+    var cmd =
+      "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command " +
+      $.global.WORD_IMPORT_CEP._quoteForCmd(inner);
+    app.system(cmd);
+    return "OK|opened";
+  } catch (e) {
+    return "ERR|" + e.message;
+  }
 };
 
 /** Remove text layers created by this tool: "Word Import #…" (batch) and "Bubble #…" (CEP drag). */
@@ -60,6 +292,46 @@ $.global.WORD_IMPORT_CEP._sanitizePathText = function (raw) {
   while (s.length && (s.charAt(0) === " " || s.charAt(0) === "\t" || s.charAt(0) === "\"" || s.charAt(0) === "'")) s = s.substring(1);
   while (s.length && (s.charAt(s.length - 1) === " " || s.charAt(s.length - 1) === "\t" || s.charAt(s.length - 1) === "\"" || s.charAt(s.length - 1) === "'")) s = s.substring(0, s.length - 1);
   return s;
+};
+
+/** Last path segment (handles \ and /). */
+$.global.WORD_IMPORT_CEP._pathLastSegment = function (fsPath) {
+  var s = String(fsPath == null ? "" : fsPath).replace(/\\/g, "/");
+  var i = s.lastIndexOf("/");
+  return i >= 0 ? s.substring(i + 1) : s;
+};
+
+/** If the leaf name looks URI-encoded (e.g. File#name on some hosts), decode once. */
+$.global.WORD_IMPORT_CEP._maybeDecodePercentEncoded = function (s) {
+  var t = String(s == null ? "" : s);
+  if (!/%[0-9A-Fa-f]{2}/.test(t)) return t;
+  try {
+    var dec = decodeURIComponent(t.replace(/\+/g, " "));
+    return dec.length > 0 ? dec : t;
+  } catch (e) {
+    return t;
+  }
+};
+
+/** Basename for sibling .jsxdata: prefer fsName leaf (Unicode-safe), then decode %XX if needed. */
+$.global.WORD_IMPORT_CEP._jsxdataBaseNameFromDocxFile = function (docxFile) {
+  try {
+    var leaf = "";
+    try {
+      leaf = $.global.WORD_IMPORT_CEP._pathLastSegment(docxFile && docxFile.fsName ? docxFile.fsName : "");
+    } catch (e0) {
+      leaf = "";
+    }
+    if (!leaf && docxFile && docxFile.name) leaf = String(docxFile.name);
+    leaf = $.global.WORD_IMPORT_CEP._maybeDecodePercentEncoded(leaf);
+    return leaf.replace(/\.[^\.]+$/, "");
+  } catch (e) {
+    try {
+      return String(docxFile && docxFile.name ? docxFile.name : "word_import_export").replace(/\.[^\.]+$/, "");
+    } catch (e2) {
+      return "word_import_export";
+    }
+  }
 };
 
 $.global.WORD_IMPORT_CEP.diagnoseRepoRoot = function () {
@@ -206,6 +478,11 @@ $.global.WORD_IMPORT_CEP._quoteJSON = function (s) {
     .replace(/\r/g, "\\r")
     .replace(/\n/g, "\\n")
     .replace(/\t/g, "\\t") + "\"";
+};
+
+/** Escape for PowerShell single-quoted string (double single quotes). */
+$.global.WORD_IMPORT_CEP._quoteForPs1Sq = function (s) {
+  return String(s == null ? "" : s).replace(/'/g, "''");
 };
 
 $.global.WORD_IMPORT_CEP._parseJSON = function (text) {
@@ -677,6 +954,10 @@ $.global.WORD_IMPORT_CEP._loadCoreApi = function (repoRootHint) {
   if (!repoRoot) throw new Error("无法定位项目目录");
   var coreFile = new File(repoRoot.fsName + "/import_to_photoshop.jsx");
   if (!coreFile.exists) throw new Error("找不到导入核心: " + coreFile.fsName);
+  // 避免二次会话中残留不完整 API（部分 PS/CEP 组合下 eval 未覆盖全局）
+  try {
+    $.global.WORD_IMPORT_API = null;
+  } catch (_) {}
   $.global.WORD_IMPORT_PANEL_MODE = true;
   $.evalFile(coreFile);
   if (!$.global.WORD_IMPORT_API) throw new Error("导入核心 API 加载失败");
@@ -744,6 +1025,7 @@ $.global.WORD_IMPORT_CEP.clearCalibration = function (repoRootHint) {
 };
 
 $.global.WORD_IMPORT_CEP.exportDocxToJsxdata = function (docxPath, outPath, repoRootHint) {
+  var runner = null;
   try {
     var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
     if (!repoRoot) return "ERR|无法定位项目目录";
@@ -753,7 +1035,7 @@ $.global.WORD_IMPORT_CEP.exportDocxToJsxdata = function (docxPath, outPath, repo
 
     var input = $.global.WORD_IMPORT_CEP._sanitizePathText(docxPath);
     if (!input) {
-      var picked = File.openDialog("选择 Word 文件", "*.docx");
+      var picked = File.openDialog("选择 Word 文件", "*.docx;*.doc");
       if (!picked) return "ERR|已取消 Word 文件选择";
       input = picked.fsName;
     }
@@ -762,28 +1044,66 @@ $.global.WORD_IMPORT_CEP.exportDocxToJsxdata = function (docxPath, outPath, repo
 
     var outputPath = $.global.WORD_IMPORT_CEP._sanitizePathText(outPath);
     if (!outputPath) {
-      var base = docxFile.name.replace(/\.[^\.]+$/, "");
+      var base = $.global.WORD_IMPORT_CEP._jsxdataBaseNameFromDocxFile(docxFile);
       outputPath = docxFile.parent.fsName + "/" + base + ".jsxdata";
     }
 
-    var cmd = "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File " +
-      $.global.WORD_IMPORT_CEP._quoteForCmd(scriptFile.fsName) +
-      " -DocxPath " + $.global.WORD_IMPORT_CEP._quoteForCmd(docxFile.fsName) +
-      " -OutFile " + $.global.WORD_IMPORT_CEP._quoteForCmd(outputPath) +
-      " -Minify";
-
-    var output = app.system(cmd);
-    var outFile = new File(outputPath);
-    if (!outFile.exists) {
-      return "ERR|导出失败，未生成文件。输出: " + String(output || "");
+    // UTF-8 BOM + PowerShell stub avoids cmd.exe codepage mangling paths with non-ASCII (CEP 含图 docx 与中文路径).
+    var tempDir = Folder.temp;
+    var runId = String(new Date().getTime());
+    runner = new File(tempDir.fsName + "/word_import_export_jsxdata_" + runId + ".ps1");
+    var sq = function (p) {
+      return $.global.WORD_IMPORT_CEP._quoteForPs1Sq(p);
+    };
+    var body =
+      "$ErrorActionPreference='Stop'\r\n" +
+      "& '" +
+      sq(scriptFile.fsName) +
+      "' -DocxPath '" +
+      sq(docxFile.fsName) +
+      "' -OutFile '" +
+      sq(outputPath) +
+      "' -Minify\r\n" +
+      "exit $LASTEXITCODE\r\n";
+    runner.encoding = "UTF-8";
+    if (!runner.open("w")) return "ERR|无法写入临时导出脚本: " + runner.fsName;
+    try {
+      runner.write("\uFEFF" + body);
+    } finally {
+      runner.close();
     }
 
-    var result = {
-      outFile: outFile.fsName,
-      shellOutput: String(output || "")
-    };
-    return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON(result);
+    var cmd =
+      "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File " +
+      $.global.WORD_IMPORT_CEP._quoteForCmd(runner.fsName);
+    var output = "";
+    try {
+      output = String(app.system(cmd) || "");
+    } catch (eSys) {
+      try {
+        if (runner && runner.exists) runner.remove();
+      } catch (_) {}
+      return "ERR|执行导出命令失败: " + eSys.message;
+    }
+
+    try {
+      if (runner && runner.exists) runner.remove();
+    } catch (_) {}
+
+    var outFile = new File(outputPath);
+    if (!outFile.exists) {
+      return "ERR|导出失败，未生成文件。PowerShell 输出: " + output;
+    }
+
+    return "OK|" +
+      $.global.WORD_IMPORT_CEP._encodeJSON({
+        outFile: outFile.fsName,
+        shellOutput: output
+      });
   } catch (e) {
+    try {
+      if (runner && runner.exists) runner.remove();
+    } catch (_) {}
     return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
   }
 };
@@ -1043,13 +1363,6 @@ $.global.WORD_IMPORT_CEP.clearBubbleBoxesFile = function (repoRootHint) {
 
 $.global.WORD_IMPORT_CEP.listQuotes = function (repoRootHint) {
   try {
-    // #region agent log
-    try {
-      if (typeof fetch === "function") {
-        fetch('http://127.0.0.1:7706/ingest/e060ea63-a144-43df-ae0b-adf401789755',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2cdb9a'},body:JSON.stringify({sessionId:'2cdb9a',runId:'font-dropdown-debug',hypothesisId:'H8',location:'host/main.jsx:listQuotes:entry',message:'listQuotes called',data:{repoRootHint:String(repoRootHint||''),documents:app.documents?app.documents.length:null},timestamp:new Date().getTime()})}).catch(function(){});
-      }
-    } catch (_) {}
-    // #endregion
     if (app.name !== "Adobe Photoshop") return "ERR|请在 Photoshop 中运行";
     var api = $.global.WORD_IMPORT_CEP._loadCoreApi(repoRootHint);
     var ctx = api.buildDefaultContext();
@@ -1087,13 +1400,6 @@ $.global.WORD_IMPORT_CEP.listQuotes = function (repoRootHint) {
     }
     return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON(result);
   } catch (e) {
-    // #region agent log
-    try {
-      if (typeof fetch === "function") {
-        fetch('http://127.0.0.1:7706/ingest/e060ea63-a144-43df-ae0b-adf401789755',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2cdb9a'},body:JSON.stringify({sessionId:'2cdb9a',runId:'font-dropdown-debug',hypothesisId:'H8',location:'host/main.jsx:listQuotes:error',message:'listQuotes failed',data:{error:String(e&&e.message?e.message:e),line:e&&e.line?Number(e.line):null},timestamp:new Date().getTime()})}).catch(function(){});
-      }
-    } catch (_) {}
-    // #endregion
     return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
   }
 };
@@ -1533,9 +1839,11 @@ $.global.WORD_IMPORT_CEP.insertBubbleText = function (payloadText, repoRootHint)
       payload.candidateTopN = payload.candidateTopN != null ? payload.candidateTopN : 5;
       payload.useCursorProbe = false;
       var preview = api.insertBubbleParagraphCEP(doc, payload);
+      if (!preview) return "ERR|预览 insertBubbleParagraphCEP 返回空";
       return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON(preview || {});
     }
     var result = api.insertBubbleParagraphCEP(doc, payload);
+    if (!result) return "ERR|insertBubbleParagraphCEP 返回空（请查看 PS 脚本错误提示或重装扩展）";
     try {
       result.debugSelInfo = !!selInfo;
       result.debugSelectionRectPassed = !!(payload && payload.selectionRect);

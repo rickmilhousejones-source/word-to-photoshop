@@ -26,6 +26,7 @@
   "bubbleUseMaskDir": true,
   "bubblePrecomputedFileName": "bubble_boxes.json",
   "bubblePrecomputedPerDataFile": true,
+  "bubbleTextAlign": "center",
   "rememberLastDataFile": true,
   "lastDataFile": "C:\\Users\\whhai\\Desktop\\The Nice House by the Sea 006 (2025) (Digital) (Pyrate-DCP)\\06.jsxdata",
   "textColorRgb": [34, 34, 34],

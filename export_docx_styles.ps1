@@ -2,8 +2,10 @@
 Exports a Word .docx into a Photoshop-friendly JS data file.
 
 Features:
-  - Splits pages by paragraph markers like #001, #002
+  - Splits pages by paragraph markers like #001, #002, P01, plain digits
   - Preserves run-level bold / italic
+  - Skips text inside floating text boxes (w:txbxContent); skips inline images without failing
+  - If input path ends with .doc: copies bytes to a temp .docx path before reading the zip (for mis-suffixed OOXML or user-renamed files; not Word 97-2003 binary)
   - Avoids JSON.parse in Photoshop ExtendScript by writing a JS object literal
 
 Usage:
@@ -34,7 +36,7 @@ function Select-DocxFile() {
   Add-Type -AssemblyName System.Windows.Forms | Out-Null
   $dialog = New-Object System.Windows.Forms.OpenFileDialog
   $dialog.Title = 'Select Word Document'
-  $dialog.Filter = 'Word Document (*.docx)|*.docx|All Files (*.*)|*.*'
+  $dialog.Filter = 'Word (*.docx;*.doc)|*.docx;*.doc|All Files (*.*)|*.*'
   $dialog.Multiselect = $false
 
   $result = $dialog.ShowDialog()
@@ -83,6 +85,30 @@ function Get-WordDocumentXml([string]$docxFullPath) {
     }
   } finally {
     $fs.Dispose()
+  }
+}
+
+function New-XmlDocumentFromWordMarkup([string]$xmlText) {
+  # Word 有时写入 XML 1.0 非法字符（尤其含图/复制粘贴），LoadXml 会整段失败；用 Reader 放宽校验。
+  $settings = New-Object System.Xml.XmlReaderSettings
+  $settings.CheckCharacters = $false
+  $settings.IgnoreComments = $true
+  $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+  $stringReader = New-Object System.IO.StringReader($xmlText)
+  try {
+    $reader = [System.Xml.XmlReader]::Create($stringReader, $settings)
+    try {
+      $xmlDoc = New-Object System.Xml.XmlDocument
+      $xmlDoc.PreserveWhitespace = $true
+      $xmlDoc.Load($reader)
+      return $xmlDoc
+    }
+    finally {
+      if ($null -ne $reader) { $reader.Dispose() }
+    }
+  }
+  finally {
+    if ($null -ne $stringReader) { $stringReader.Dispose() }
   }
 }
 
@@ -165,22 +191,54 @@ function Get-ParagraphPlainText([object]$segments) {
   return $sb.ToString()
 }
 
+function Normalize-ExportPageKey([string]$digits) {
+  if ([string]::IsNullOrWhiteSpace($digits)) { return $null }
+  return ([string]$digits).PadLeft(3, '0')
+}
+
+function Try-GetPageMarkerFromPlain([string]$plainText) {
+  if ([string]::IsNullOrWhiteSpace($plainText)) { return $null }
+  $t = $plainText.Trim()
+  if ($t.Length -eq 0) { return $null }
+  $m = [regex]::Match($t, '^\s*#(?<n>\d{1,4})\s*$')
+  if ($m.Success) { return (Normalize-ExportPageKey $m.Groups['n'].Value) }
+  $m = [regex]::Match($t, '^\s*P(?<n>\d{1,4})\s*$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if ($m.Success) { return (Normalize-ExportPageKey $m.Groups['n'].Value) }
+  $m = [regex]::Match($t, '^\s*(?<n>\d{1,4})\s*$')
+  if ($m.Success) { return (Normalize-ExportPageKey $m.Groups['n'].Value) }
+  return $null
+}
+
 function Parse-Paragraphs([string]$xmlText) {
-  $xmlDoc = New-Object System.Xml.XmlDocument
-  $xmlDoc.PreserveWhitespace = $true
-  $xmlDoc.LoadXml($xmlText)
+  $xmlDoc = New-XmlDocumentFromWordMarkup -xmlText $xmlText
 
   $ns = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
   $ns.AddNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main')
+  $ns.AddNamespace('mc', 'http://schemas.openxmlformats.org/markup-compatibility/2006')
 
   $paras = New-Object System.Collections.Generic.List[object]
 
-  $pNodes = $xmlDoc.SelectNodes('//w:document/w:body/w:p', $ns)
+  # 含 w:tbl / 内容控件等时，正文 w:p 往往不在 body 的直接子级；必须取 body 下所有段落。
+  $pNodes = $xmlDoc.SelectNodes('//w:body//w:p', $ns)
   foreach ($p in $pNodes) {
+    # 浮动文本框 / 形状内文字（非正文流）
+    if ($null -ne $p.SelectSingleNode('ancestor::w:txbxContent', $ns)) { continue }
+
     $segments = New-Object System.Collections.Generic.List[object]
 
     $rNodes = $p.SelectNodes('./w:r', $ns)
     foreach ($r in $rNodes) {
+      # Inline images / drawings: ignore image-only runs; keep text if Word merged w:t in the same w:r
+      $tProbe = $r.SelectNodes('.//w:t', $ns)
+      $onlyMedia =
+        ($tProbe.Count -eq 0) -and (
+          ($null -ne $r.SelectSingleNode('./w:drawing', $ns)) -or
+          ($null -ne $r.SelectSingleNode('./w:pict', $ns)) -or
+          ($null -ne $r.SelectSingleNode('./mc:AlternateContent', $ns)) -or
+          ($null -ne $r.SelectSingleNode('./w:object', $ns))
+        )
+      if ($onlyMedia) { continue }
+
       $style = Get-RunStyle -xmlDoc $xmlDoc -rNode $r -ns $ns
       $bold = [bool]$style.bold
       $italic = [bool]$style.italic
@@ -219,16 +277,14 @@ function Parse-Paragraphs([string]$xmlText) {
 }
 
 function Group-ParagraphsByPage([object]$paragraphs) {
-  $pageMarkerRegex = '^\s*#(?<page>\d{1,})\s*$'
   $pages = New-Object System.Collections.Generic.List[object]
   $warnings = New-Object System.Collections.Generic.List[string]
   $currentPage = $null
 
   foreach ($paragraph in $paragraphs) {
     $plainText = [string]$paragraph.text
-    $match = [regex]::Match($plainText, $pageMarkerRegex)
-    if ($match.Success) {
-      $pageNumber = $match.Groups['page'].Value.PadLeft(3, '0')
+    $pageNumber = Try-GetPageMarkerFromPlain $plainText
+    if ($pageNumber) {
       $currentPage = [pscustomobject]@{
         page = $pageNumber
         paragraphs = New-Object System.Collections.Generic.List[object]
@@ -267,7 +323,7 @@ function Build-ExportPayload([string]$docxFullPath, [object]$groupedPages) {
       type = 'docx'
       path = $docxFullPath
     }
-    pageMarkerPattern = '#NNN'
+    pageMarkerPattern = '#NNN | Pnnn (case-insensitive) | plain digits NNN'
     pages = $groupedPages.pages
     warnings = $groupedPages.warnings
   }
@@ -284,35 +340,59 @@ var WORD_IMPORT_DATA = $json;
 "@
 }
 
+function Copy-DocPathToTempDocxPath([string]$sourcePath) {
+  $sourcePath = Resolve-FullPath $sourcePath
+  if (-not (Test-Path -LiteralPath $sourcePath)) { throw "File not found: $sourcePath" }
+  if ([System.IO.Path]::GetExtension($sourcePath) -ine ".doc") {
+    return $sourcePath
+  }
+  $tempDocx = Join-Path ([System.IO.Path]::GetTempPath()) ('word_import_doc_as_docx_' + [Guid]::NewGuid().ToString('N') + '.docx')
+  Copy-Item -LiteralPath $sourcePath -Destination $tempDocx -Force
+  return $tempDocx
+}
+
 if ([string]::IsNullOrWhiteSpace($DocxPath)) {
   $DocxPath = Select-DocxFile
 }
 
-$docxFull = Resolve-FullPath $DocxPath
+$payloadSourcePath = Resolve-FullPath $DocxPath
+$tempRenamedDocx = $null
+$docxFull = $payloadSourcePath
+try {
+  if ([System.IO.Path]::GetExtension($payloadSourcePath) -ieq ".doc") {
+    $docxFull = Copy-DocPathToTempDocxPath -sourcePath $payloadSourcePath
+    $tempRenamedDocx = $docxFull
+  }
 
-if ([string]::IsNullOrWhiteSpace($OutFile)) {
-  $OutFile = Select-OutputFilePath -docxFullPath $docxFull
+  if ([string]::IsNullOrWhiteSpace($OutFile)) {
+    $OutFile = Select-OutputFilePath -docxFullPath $payloadSourcePath
+  }
+
+  $outFull = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path (Get-Location) $OutFile }
+
+  $xml = Get-WordDocumentXml -docxFullPath $docxFull
+  $paragraphs = Parse-Paragraphs -xmlText $xml
+  $grouped = Group-ParagraphsByPage -paragraphs $paragraphs
+  $payload = Build-ExportPayload -docxFullPath $payloadSourcePath -groupedPages $grouped
+
+  $outDir = Split-Path -Parent $outFull
+  if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
+    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+  }
+
+  [System.IO.File]::WriteAllText($outFull, (ConvertTo-PhotoshopDataFile -payload $payload -Minify:$Minify), [System.Text.Encoding]::UTF8)
+
+  Write-Host "Wrote Photoshop data: $outFull"
+  Write-Host ("Pages found: " + $payload.pages.Count)
+  if ($payload.warnings.Count -gt 0) {
+    Write-Host "Warnings:"
+    foreach ($warning in $payload.warnings) {
+      Write-Host ("- " + $warning)
+    }
+  }
 }
-
-$outFull = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path (Get-Location) $OutFile }
-
-$xml = Get-WordDocumentXml -docxFullPath $docxFull
-$paragraphs = Parse-Paragraphs -xmlText $xml
-$grouped = Group-ParagraphsByPage -paragraphs $paragraphs
-$payload = Build-ExportPayload -docxFullPath $docxFull -groupedPages $grouped
-
-$outDir = Split-Path -Parent $outFull
-if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
-  New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-}
-
-[System.IO.File]::WriteAllText($outFull, (ConvertTo-PhotoshopDataFile -payload $payload -Minify:$Minify), [System.Text.Encoding]::UTF8)
-
-Write-Host "Wrote Photoshop data: $outFull"
-Write-Host ("Pages found: " + $payload.pages.Count)
-if ($payload.warnings.Count -gt 0) {
-  Write-Host "Warnings:"
-  foreach ($warning in $payload.warnings) {
-    Write-Host ("- " + $warning)
+finally {
+  if ($tempRenamedDocx -and (Test-Path -LiteralPath $tempRenamedDocx)) {
+    Remove-Item -LiteralPath $tempRenamedDocx -Force -ErrorAction SilentlyContinue
   }
 }

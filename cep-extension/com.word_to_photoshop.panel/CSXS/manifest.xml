@@ -1,17 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<ExtensionManifest Version="7.0" ExtensionBundleId="com.word_to_photoshop.bundle" ExtensionBundleVersion="1.0.0" ExtensionBundleName="Word To Photoshop CEP">
+<ExtensionManifest Version="7.0" ExtensionBundleId="com.word_to_photoshop.bundle" ExtensionBundleVersion="1.1.0" ExtensionBundleName="Word To Photoshop CEP">
   <ExtensionList>
-    <Extension Id="com.word_to_photoshop.panel" Version="1.0.0"/>
+    <Extension Id="com.word_to_photoshop.panel" Version="1.1.0"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>
+      <!-- 19.0 = CC 2018; include PHSP for builds that register under the alternate host id -->
       <Host Name="PHXS" Version="[19.0,99.9]"/>
+      <Host Name="PHSP" Version="[19.0,99.9]"/>
     </HostList>
     <LocaleList>
       <Locale Code="All"/>
     </LocaleList>
     <RequiredRuntimeList>
-      <RequiredRuntime Name="CSXS" Version="10.0"/>
+      <!-- CC 2018: Adobe forum reports CSXS 8.0 here can fail manifest validation; 7.0 loads. Newer PS still satisfies >= 7. -->
+      <RequiredRuntime Name="CSXS" Version="7.0"/>
     </RequiredRuntimeList>
   </ExecutionEnvironment>
   <DispatchInfoList>

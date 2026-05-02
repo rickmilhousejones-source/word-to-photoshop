@@ -1,5 +1,9 @@
 (function () {
-  var BUILD_ID = "2026-05-01T13:00+08 directPlace-v1";
+  var BUILD_ID = "2026-05-02T12:00+08 cep-v1.1";
+  /** Keep in sync with CSXS/manifest.xml ExtensionBundleVersion and release-channel.json. */
+  var EXTENSION_BUNDLE_VERSION = "1.1.0";
+  /** 检查更新（测试）：仅此渠道，直接打开腾讯文档，不请求 release-channel.json。 */
+  var UPDATE_DOCS_URL = "https://docs.qq.com/doc/DRG9LcFd0S1pab1RZ";
   var logBox = document.getElementById("logBox");
   var pageSelect = document.getElementById("pageSelect");
   var quoteList = document.getElementById("quoteList");
@@ -28,6 +32,49 @@
   var requireMouseUpBeforeTrigger = false;
   var suppressTriggerUntilTs = 0;
 
+  var CE_TEXT_ALIGN_KEY = "word_import_cep_text_align";
+
+  function normalizeClientTextAlign(v) {
+    var s = String(v == null ? "" : v).replace(/^\s+|\s+$/g, "").toLowerCase();
+    if (s === "right") return "right";
+    if (s === "center" || s === "centre" || s === "middle") return "center";
+    return "left";
+  }
+
+  function getCeTextAlign() {
+    try {
+      if (window.localStorage) {
+        var v = window.localStorage.getItem(CE_TEXT_ALIGN_KEY);
+        if (v) return normalizeClientTextAlign(v);
+      }
+    } catch (_) {}
+    return "center";
+  }
+
+  function setCeTextAlign(raw) {
+    var v = normalizeClientTextAlign(raw);
+    try {
+      if (window.localStorage) window.localStorage.setItem(CE_TEXT_ALIGN_KEY, v);
+    } catch (_) {}
+    updateAlignToolbarUi();
+    log("画布投放对齐已设为: " + v + "（将写入本次投放请求）。");
+  }
+
+  function updateAlignToolbarUi() {
+    var cur = getCeTextAlign();
+    var ids = { left: "btnAlignLeft", center: "btnAlignCenter", right: "btnAlignRight" };
+    var k;
+    for (k in ids) {
+      if (!ids.hasOwnProperty(k)) continue;
+      var el = document.getElementById(ids[k]);
+      if (!el) continue;
+      try {
+        if (k === cur) el.classList.add("alignActive");
+        else el.classList.remove("alignActive");
+      } catch (_) {}
+    }
+  }
+
   function log(msg) {
     var now = new Date();
     var ts = now.toTimeString().slice(0, 8);
@@ -36,13 +83,43 @@
     logBox.scrollTop = logBox.scrollHeight;
   }
 
+  function isCepHost() {
+    return !!(window.__adobe_cep__ && window.__adobe_cep__.evalScript);
+  }
+
+  var noCepCallHostLogged = false;
+  function showNoCepBanner() {
+    var shell = document.querySelector(".shell");
+    if (!shell || document.getElementById("noCepBanner")) return;
+    var bar = document.createElement("div");
+    bar.id = "noCepBanner";
+    bar.className = "noCepBanner";
+    bar.setAttribute("role", "alert");
+    bar.innerHTML =
+      "<strong>未连接到 Photoshop（非 CEP 环境）</strong>" +
+      "本界面必须在 Photoshop 内通过菜单打开，例如：<kbd>窗口</kbd> → <kbd>扩展功能（旧版）</kbd> → <kbd>Word Import CEP</kbd>。" +
+      "请勿用 Chrome / Edge 直接打开 <code>index.html</code>，也不要用「在浏览器中打开」预览扩展文件夹。" +
+      "若用户已按上述方式打开仍出现本提示，请重新安装扩展包或清理 CEP 缓存后重启 Photoshop。";
+    shell.insertBefore(bar, shell.firstChild);
+  }
+
   function callHost(script, done) {
-    if (!window.__adobe_cep__ || !window.__adobe_cep__.evalScript) {
-      log("当前环境不是 CEP（缺少 __adobe_cep__）");
+    if (!isCepHost()) {
+      if (!noCepCallHostLogged) {
+        noCepCallHostLogged = true;
+        log(
+          "当前环境不是 CEP（缺少 __adobe_cep__）。请从 Photoshop 内打开本面板，勿在独立浏览器中预览。"
+        );
+      }
       if (typeof done === "function") done("ERR|NO_CEP");
       return;
     }
     window.__adobe_cep__.evalScript(script, function (result) {
+      if (result === "" || result == null) {
+        log(
+          "[diag] evalScript 返回空值；若仅在第二次打开 PS 后出现，可尝试「扩展开发模式」或清理 CEP 缓存后重载扩展。"
+        );
+      }
       if (typeof done === "function") done(result);
     });
   }
@@ -62,6 +139,35 @@
 
   function escHostString(s) {
     return String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
+  function openUrlInDefaultBrowser(url) {
+    var u = String(url || "").trim();
+    if (!u) return;
+    try {
+      if (window.cep && window.cep.util && typeof window.cep.util.openURLInDefaultBrowser === "function") {
+        window.cep.util.openURLInDefaultBrowser(u);
+        log("已在系统浏览器中打开链接。");
+        return;
+      }
+    } catch (e1) {
+      log("打开链接（cep.util）失败: " + (e1 && e1.message ? e1.message : e1));
+    }
+    callHost('WORD_IMPORT_CEP.openUrlInDefaultBrowser("' + escHostString(u) + '")', function (r) {
+      if (r && r.indexOf("OK|") === 0) log("已在系统浏览器中打开链接（Host）。");
+      else log("打开浏览器失败: " + String(r || ""));
+    });
+  }
+
+  function checkForUpdates() {
+    log(
+      "检查更新（测试）：打开腾讯文档（当前扩展 v=" +
+        EXTENSION_BUNDLE_VERSION +
+        " build=" +
+        BUILD_ID +
+        "）。"
+    );
+    openUrlInDefaultBrowser(UPDATE_DOCS_URL);
   }
 
   function decodePayload(text) {
@@ -85,16 +191,6 @@
     }
   }
 
-  function debugLog(hypothesisId, location, message, data) {
-    // #region agent log
-    try {
-      if (typeof fetch === "function") {
-        fetch('http://127.0.0.1:7706/ingest/e060ea63-a144-43df-ae0b-adf401789755',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2cdb9a'},body:JSON.stringify({sessionId:'2cdb9a',runId:'run-client-placement',hypothesisId:hypothesisId,location:location,message:message,data:data||{},timestamp:Date.now()})}).catch(()=>{});
-      }
-    } catch (_) {}
-    // #endregion
-  }
-
   function buildCandidatePromptText(previewInfo) {
     var list = (previewInfo && previewInfo.candidates) ? previewInfo.candidates : [];
     if (!list.length) return "";
@@ -116,24 +212,10 @@
 
   function pickBubbleCandidate(previewInfo) {
     var list = (previewInfo && previewInfo.candidates) ? previewInfo.candidates : [];
-    debugLog("H6", "client/main.js:pickBubbleCandidate:entry", "candidate picker opened", {
-      candidateCount: list.length,
-      detectedBubbles: previewInfo && previewInfo.detectedBubbles != null ? previewInfo.detectedBubbles : null,
-      precomputedStatus: previewInfo && previewInfo.precomputedStatus ? previewInfo.precomputedStatus : "",
-      bubbleSource: previewInfo && previewInfo.bubbleSource ? previewInfo.bubbleSource : ""
-    });
     if (!list.length) return 0;
     var answer = window.prompt(buildCandidatePromptText(previewInfo), "1");
-    debugLog("H7", "client/main.js:pickBubbleCandidate:answer", "raw answer received", {
-      answer: answer == null ? null : String(answer)
-    });
     if (answer == null) return null;
     var n = parseInt(String(answer).trim(), 10);
-    debugLog("H7", "client/main.js:pickBubbleCandidate:parsed", "parsed answer", {
-      parsed: isFinite(n) ? n : null,
-      min: 1,
-      max: list.length
-    });
     if (!isFinite(n) || n < 1 || n > list.length) return -1;
     return n - 1;
   }
@@ -185,12 +267,6 @@
       return;
     }
     placementIntervalId = window.setInterval(tickPlacementWatch, 30);
-    // #region agent log
-    debugLog("H5", "client/main.js:startPlacementWatch", "watch loop started", {
-      hasPendingQuote: !!pendingQuote,
-      probePathLen: probePathUtf8 ? String(probePathUtf8).length : 0
-    });
-    // #endregion
     log("调试: 画布点击轮询已启动。");
   }
 
@@ -207,22 +283,9 @@
 
   function tickPlacementWatch() {
     if (!pendingQuote || isPlacingQuote) {
-      // #region agent log
-      debugLog("H6", "client/main.js:tickPlacementWatch", "tick early return pending/placing", {
-        hasPendingQuote: !!pendingQuote,
-        isPlacingQuote: !!isPlacingQuote
-      });
-      // #endregion
       return;
     }
     if (!probePathUtf8 || !window.cep || !window.cep.fs) {
-      // #region agent log
-      debugLog("H6", "client/main.js:tickPlacementWatch", "tick early return probe path or cep fs unavailable", {
-        hasProbePath: !!probePathUtf8,
-        hasCepObj: !!window.cep,
-        hasCepFs: !!(window.cep && window.cep.fs)
-      });
-      // #endregion
       return;
     }
     var hbNow = Date.now();
@@ -235,14 +298,6 @@
       var t0 = Date.now();
       if (t0 - lastTickEarlyLogTs > 1000) {
         lastTickEarlyLogTs = t0;
-        // #region agent log
-        debugLog("H6", "client/main.js:tickPlacementWatch", "probe read failed", {
-          hasRes: !!res,
-          err: res ? Number(res.err) : null,
-          hasData: !!(res && res.data != null),
-          probePath: String(probePathUtf8 || "")
-        });
-        // #endregion
       }
       return;
     }
@@ -257,11 +312,6 @@
       var t1 = Date.now();
       if (t1 - lastTickEarlyLogTs > 1000) {
         lastTickEarlyLogTs = t1;
-        // #region agent log
-        debugLog("H7", "client/main.js:tickPlacementWatch", "probe json parse failed", {
-          dataHead: String(res.data || "").slice(0, 120)
-        });
-        // #endregion
       }
       return;
     }
@@ -284,11 +334,6 @@
     var nowTs = Date.now();
     if (nowTs - lastPlacementTriggerTs < 600) return;
     if (nowTs < suppressTriggerUntilTs) {
-      // #region agent log
-      debugLog("H10", "client/main.js:tickPlacementWatch", "trigger suppressed by post-select cooldown", {
-        remainMs: suppressTriggerUntilTs - nowTs
-      });
-      // #endregion
       return;
     }
 
@@ -296,14 +341,6 @@
     var okAligned = !!o.cursorFgAligned;
     var okInClient = !!o.cursorInForegroundClient;
     if (!okFg || !okAligned || !okInClient) {
-      // #region agent log
-      debugLog("H2", "client/main.js:tickPlacementWatch", "probe rejected by foreground constraints", {
-        okFg: okFg,
-        okAligned: okAligned,
-        okInClient: okInClient,
-        fgProc: String(o.foregroundProcessName || "")
-      });
-      // #endregion
       hoverStableSinceTs = 0;
       lastProbeCursorX = NaN;
       lastProbeCursorY = NaN;
@@ -327,16 +364,6 @@
         Number(o.cursorY) >= panelRect.top &&
         Number(o.cursorY) < panelRect.bottom;
       if (inPanel) {
-        // #region agent log
-        debugLog("H9", "client/main.js:tickPlacementWatch", "cursor is inside CEP panel rect; ignore trigger", {
-          cursorX: Number(o.cursorX),
-          cursorY: Number(o.cursorY),
-          panelLeft: panelRect.left,
-          panelTop: panelRect.top,
-          panelRight: panelRect.right,
-          panelBottom: panelRect.bottom
-        });
-        // #endregion
         return;
       }
     }
@@ -344,15 +371,6 @@
     // Primary trigger: release edge (mouseup). For color sampler, point is committed after click completes.
     var shouldAttempt = edgeUp;
     if (shouldAttempt) {
-      // #region agent log
-      debugLog("H1", "client/main.js:tickPlacementWatch", "trigger condition passed", {
-        down: down,
-        edgeDown: edgeDown,
-        edgeUp: edgeUp,
-        cursorX: Number(o.cursorX),
-        cursorY: Number(o.cursorY)
-      });
-      // #endregion
       lastPlacementTriggerTs = nowTs;
       log("检测到画布点击，开始直投...");
       triggerInsertQuoteToPs(pendingQuote, { directPlace: true, probeSnapshot: o });
@@ -363,13 +381,6 @@
   }
 
   function triggerInsertQuoteToPs(item, options) {
-    // #region agent log
-    debugLog("H3", "client/main.js:triggerInsertQuoteToPs", "insert trigger entered", {
-      hasItem: !!item,
-      directPlace: !!(options && options.directPlace),
-      isPlacingQuote: !!isPlacingQuote
-    });
-    // #endregion
     stopPlacementWatch();
     isPlacingQuote = true;
     insertQuoteToPs(item, options || {}, function () {
@@ -450,13 +461,6 @@
       "已选择 #" + item.page + " 段 " + item.paragraph +
         "：请切换到 Photoshop，在画布上单击要投放的位置。"
     );
-    // #region agent log
-    debugLog("H1", "client/main.js:selectQuoteItem", "quote selected and armed", {
-      page: String(item && item.page || ""),
-      paragraph: Number(item && item.paragraph),
-      hasSegments: !!(item && item.segments && item.segments.length)
-    });
-    // #endregion
     callHost("WORD_IMPORT_CEP.beginSamplerAnchorMode()", function (r) {
       if (r && r.indexOf("OK|") === 0) {
         log("已切换到颜色取样点工具，请在画布单击一次目标位置。");
@@ -497,26 +501,13 @@
       anchorMode: "fraction",
       fracX: 0.5,
       fracY: 0.5,
-      useCursorProbe: true
+      useCursorProbe: true,
+      textAlign: getCeTextAlign()
     };
 
     if (options.directPlace) {
       payload.placeAtCursorOnly = true;
       if (options.probeSnapshot) payload.probeSnapshot = options.probeSnapshot;
-      // #region agent log
-      debugLog("H3", "client/main.js:insertQuoteToPs", "sending directPlace request", {
-        page: String(payload.page || ""),
-        paragraph: Number(payload.paragraph),
-        placeAtCursorOnly: !!payload.placeAtCursorOnly,
-        hasProbeSnapshot: !!payload.probeSnapshot,
-        probeCursorX: payload.probeSnapshot ? Number(payload.probeSnapshot.cursorX) : null,
-        probeCursorY: payload.probeSnapshot ? Number(payload.probeSnapshot.cursorY) : null,
-        probeClientL: payload.probeSnapshot ? Number(payload.probeSnapshot.clientL) : null,
-        probeClientT: payload.probeSnapshot ? Number(payload.probeSnapshot.clientT) : null,
-        probeClientR: payload.probeSnapshot ? Number(payload.probeSnapshot.clientR) : null,
-        probeClientB: payload.probeSnapshot ? Number(payload.probeSnapshot.clientB) : null
-      });
-      // #endregion
       var payloadText0 = encodeURIComponent(JSON.stringify(payload));
       var script0 =
         'WORD_IMPORT_CEP.insertBubbleText("' +
@@ -525,12 +516,6 @@
         escHostString(repoRootHint) +
         '")';
       callHost(script0, function (result0) {
-        // #region agent log
-        debugLog("H4", "client/main.js:insertQuoteToPs:directPlaceCallback", "host returned directPlace result", {
-          okPrefix: !!(result0 && result0.indexOf("OK|") === 0),
-          resultHead: String(result0 || "").slice(0, 160)
-        });
-        // #endregion
         function finalizeSamplerAndEnd() {
           callHost("WORD_IMPORT_CEP.finishSamplerAnchorMode()", function (r2) {
             if (!(r2 && r2.indexOf("OK|") === 0)) {
@@ -541,26 +526,6 @@
         }
         if (result0 && result0.indexOf("OK|") === 0) {
           var info0 = decodePayload(result0.slice(3)) || {};
-          // #region agent log
-          debugLog("H8", "client/main.js:insertQuoteToPs:directPlaceCallback", "decoded host placement result", {
-            anchorUsed: String(info0.anchorUsed || ""),
-            anchorDocX: Number(info0.anchorDocX),
-            anchorDocY: Number(info0.anchorDocY),
-            x: Number(info0.x),
-            y: Number(info0.y),
-            debugAnchorSource: String(info0.debugAnchorSource || ""),
-            debugSamplerCount: info0.debugSamplerCount == null ? null : Number(info0.debugSamplerCount),
-            debugSamplerIndex: info0.debugSamplerIndex == null ? null : Number(info0.debugSamplerIndex),
-            debugSamplerX: info0.debugSamplerX == null ? null : Number(info0.debugSamplerX),
-            debugSamplerY: info0.debugSamplerY == null ? null : Number(info0.debugSamplerY),
-            debugProbeFromPayload: !!info0.debugProbeFromPayload,
-            debugProbeAvailable: !!info0.debugProbeAvailable,
-            debugPointFromProbe: !!info0.debugPointFromProbe,
-            debugProbeCursorX: info0.debugProbeCursorX == null ? null : Number(info0.debugProbeCursorX),
-            debugProbeCursorY: info0.debugProbeCursorY == null ? null : Number(info0.debugProbeCursorY),
-            debugScreenToDocFail: String(info0.debugScreenToDocFail || "")
-          });
-          // #endregion
           var anchorMsg0 = "（按鼠标点击位置直投）";
           if (info0.anchorUsed) anchorMsg0 += "（anchor: " + info0.anchorUsed + "）";
           log("已投放到 PS: " + (info0.layerName || ("#" + item.page + "-" + item.paragraph)) + anchorMsg0);
@@ -587,19 +552,10 @@
     callHost(previewScript, function (previewResult) {
       if (!previewResult || previewResult.indexOf("OK|") !== 0) {
         log("获取候选气泡失败: " + (previewResult || "UNKNOWN_ERROR"));
-        debugLog("H8", "client/main.js:insertQuoteToPs:previewError", "preview call failed", {
-          result: String(previewResult || "")
-        });
         end();
         return;
       }
       var previewInfo = decodePayload(previewResult.slice(3)) || {};
-      debugLog("H6", "client/main.js:insertQuoteToPs:previewOk", "preview result decoded", {
-        candidateCount: previewInfo && previewInfo.candidates ? previewInfo.candidates.length : 0,
-        detectedBubbles: previewInfo && previewInfo.detectedBubbles != null ? previewInfo.detectedBubbles : null,
-        precomputedStatus: previewInfo && previewInfo.precomputedStatus ? previewInfo.precomputedStatus : "",
-        bubbleSource: previewInfo && previewInfo.bubbleSource ? previewInfo.bubbleSource : ""
-      });
       var picked = null;
       if (options.autoPickNearest) {
         var list = (previewInfo && previewInfo.candidates) ? previewInfo.candidates : [];
@@ -609,7 +565,6 @@
       }
       if (picked === null) {
         log("已取消本次投放。");
-        debugLog("H7", "client/main.js:insertQuoteToPs:cancelled", "user cancelled candidate pick", {});
         end();
         return;
       }
@@ -620,9 +575,6 @@
           return;
         }
         log("输入无效：请选择 1-" + ((previewInfo.candidates && previewInfo.candidates.length) || 0) + "。");
-        debugLog("H7", "client/main.js:insertQuoteToPs:invalid", "user input invalid for candidate range", {
-          candidateCount: previewInfo && previewInfo.candidates ? previewInfo.candidates.length : 0
-        });
         end();
         return;
       }
@@ -633,12 +585,6 @@
         payload.docX = Number(previewInfo.hintDocX);
         payload.docY = Number(previewInfo.hintDocY);
       }
-      debugLog("H8", "client/main.js:insertQuoteToPs:finalPayload", "sending final insert payload", {
-        selectedBubbleIndex: payload.selectedBubbleIndex,
-        anchorMode: payload.anchorMode,
-        docX: payload.docX,
-        docY: payload.docY
-      });
       var payloadText = encodeURIComponent(JSON.stringify(payload));
       var script = 'WORD_IMPORT_CEP.insertBubbleText("' + escHostString(payloadText) + '","' + escHostString(repoRootHint) + '")';
       callHost(script, function (result) {
@@ -725,30 +671,16 @@
   }
 
   function reloadQuotes() {
-    debugLog("H1", "client/main.js:reloadQuotes:start", "reloadQuotes invoked", {
-      repoRootHint: String(repoRootHint || "")
-    });
     var script = 'WORD_IMPORT_CEP.listQuotes("' + escHostString(repoRootHint) + '")';
     callHost(script, function (result) {
-      debugLog("H2", "client/main.js:reloadQuotes:result", "listQuotes raw result", {
-        okPrefix: !!(result && result.indexOf("OK|") === 0),
-        resultHead: String(result || "").slice(0, 220)
-      });
       if (!result || result.indexOf("OK|") !== 0) {
         quoteState = { pages: [], defaultPage: "001" };
         renderPageOptions();
         renderQuoteList();
         log("读取台词失败: " + (result || "UNKNOWN_ERROR"));
-        debugLog("H3", "client/main.js:reloadQuotes:error", "listQuotes returned non-OK", {
-          result: String(result || "")
-        });
         return;
       }
       var payload = decodePayload(result.slice(3)) || {};
-      debugLog("H4", "client/main.js:reloadQuotes:payload", "decoded payload summary", {
-        defaultPage: String(payload.defaultPage || ""),
-        pagesCount: payload.pages && payload.pages.length ? payload.pages.length : 0
-      });
       var pages = payload.pages || [];
       var normalizedPages = [];
       for (var i = 0; i < pages.length; i++) {
@@ -808,6 +740,18 @@
     runFromRepo("import_panel.jsx");
   });
 
+  (function bindCheckUpdate() {
+    var el = document.getElementById("btnCheckUpdate");
+    if (!el) return;
+    el.addEventListener("click", function () {
+      if (!isCepHost()) {
+        log("检查更新需要在 Photoshop CEP 面板内使用（需联网）。");
+        return;
+      }
+      checkForUpdates();
+    });
+  })();
+
   try {
     var titleEl = document.querySelector(".appTitle");
     if (titleEl) {
@@ -851,6 +795,17 @@
       log(result || "NO_RESPONSE");
     });
   });
+
+  function bindAlignBtn(id, alignKey) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("click", function () {
+      setCeTextAlign(alignKey);
+    });
+  }
+  bindAlignBtn("btnAlignLeft", "left");
+  bindAlignBtn("btnAlignCenter", "center");
+  bindAlignBtn("btnAlignRight", "right");
 
   document.getElementById("btnCalibPoint1").addEventListener("click", function () {
     callHost('WORD_IMPORT_CEP.captureCalibrationPoint("' + escHostString(repoRootHint) + '")', function (result) {
@@ -966,10 +921,30 @@
     renderQuoteList();
   });
 
-  initRepoRootHint();
-  bootstrapCursorProbe();
+  updateAlignToolbarUi();
   renderPageOptions();
   renderQuoteList();
+
+  if (!isCepHost()) {
+    showNoCepBanner();
+    log(
+      "漫画汉化导入助手 1.1 已加载，但未检测到 CEP（无法与 Photoshop 通信）。build=" +
+        BUILD_ID +
+        " v=" +
+        EXTENSION_BUNDLE_VERSION
+    );
+    return;
+  }
+
+  initRepoRootHint();
+  bootstrapCursorProbe();
   reloadQuotes();
-  log("漫画汉化导入助手 1.0（CEP）已启动。build=" + BUILD_ID);
+  log(
+    "漫画汉化导入助手 1.1（CEP）已启动。build=" + BUILD_ID + " v=" + EXTENSION_BUNDLE_VERSION
+  );
+  callHost("WORD_IMPORT_CEP.ping()", function (r) {
+    var s = String(r || "");
+    if (s.indexOf("PONG") >= 0) log("Host 预热成功: " + s.slice(0, 96));
+    else log("[diag] Host 预热: " + (s || "(空响应)"));
+  });
 })();

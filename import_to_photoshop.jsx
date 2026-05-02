@@ -166,7 +166,8 @@ Settings are read from settings.json beside this script.
       bubblePrecomputedPerDataFile: true,
       rememberLastDataFile: true,
       lastDataFile: "",
-      textColorRgb: [34, 34, 34]
+      textColorRgb: [34, 34, 34],
+      bubbleTextAlign: "center"
     };
 
     if (!f.exists) {
@@ -193,6 +194,45 @@ Settings are read from settings.json beside this script.
     var key;
     for (key in base) out[key] = base[key];
     for (key in override) out[key] = override[key];
+    return out;
+  }
+
+  function normalizeTextAlignKey(raw) {
+    var s = String(raw == null ? "" : raw).replace(/^\s+|\s+$/g, "").toLowerCase();
+    if (s === "right") return "right";
+    if (s === "center" || s === "centre" || s === "middle") return "center";
+    return "left";
+  }
+
+  function typographyOptsFromAlignKey(alignKey) {
+    var k = normalizeTextAlignKey(alignKey);
+    return {
+      alignKey: k,
+      centered: k === "center"
+    };
+  }
+
+  function resolveBubbleTypographyOpts(payload, cfg) {
+    var fromPayload = payload && payload.textAlign != null ? String(payload.textAlign) : "";
+    var fromCfg = cfg && cfg.bubbleTextAlign != null ? String(cfg.bubbleTextAlign) : "";
+    var key = normalizeTextAlignKey(fromPayload || fromCfg || "center");
+    return typographyOptsFromAlignKey(key);
+  }
+
+  function cloneParaWithSingleLineSegments(para) {
+    var out = { segments: [] };
+    var segs = (para && para.segments) ? para.segments : [];
+    for (var i = 0; i < segs.length; i++) {
+      var seg = segs[i] || {};
+      var t = seg.text != null ? String(seg.text) : "";
+      if (!t) continue;
+      t = t.replace(/\r\n|\r|\n/g, " ");
+      out.segments.push({
+        text: t,
+        bold: !!seg.bold,
+        italic: !!seg.italic
+      });
+    }
     return out;
   }
 
@@ -473,6 +513,21 @@ Settings are read from settings.json beside this script.
     if (computedGap >= 0) {
       cfg.horizontalGap = computedGap;
     }
+    if (!models.length && paragraphs && paragraphs.length) {
+      for (var mi = 0; mi < paragraphs.length; mi++) {
+        var para0 = paragraphs[mi];
+        var paraUse0 = cloneParaWithSingleLineSegments(para0);
+        var model0 = buildParagraphTextAndRanges(paraUse0, font, cfg);
+        if (!model0.fullText) continue;
+        var estimatedH0 = estimateParagraphHeight(model0.fullText, cfg);
+        models.push({
+          paragraphIndex: (para0 && para0.index) ? para0.index : (mi + 1),
+          fullText: model0.fullText,
+          styleRanges: model0.styleRanges,
+          estimatedH: estimatedH0
+        });
+      }
+    }
     var templateLayer = null;
     try {
       templateLayer = createTextLayer(doc, cfg, selectedPage, "TEMPLATE");
@@ -503,11 +558,11 @@ Settings are read from settings.json beside this script.
 
       try {
         applyTextWithStyleRanges(layer, item.fullText, item.styleRanges, cfg);
-        applyParagraphTypography(layer, cfg, { centered: false });
+        applyParagraphTypography(layer, cfg, typographyOptsFromAlignKey("left"));
         importedCount++;
       } catch (e) {
         try { layer.textItem.contents = item.fullText; } catch (_) {}
-        try { applyParagraphTypography(layer, cfg, { centered: false }); } catch (_) {}
+        try { applyParagraphTypography(layer, cfg, typographyOptsFromAlignKey("left")); } catch (_) {}
         errors.push({
           page: selectedPage,
           paragraph: item.paragraphIndex,
@@ -683,7 +738,8 @@ Settings are read from settings.json beside this script.
       var totalH = 0;
       for (var i = 0; i < paragraphs.length; i++) {
         var para = paragraphs[i];
-        var model = buildParagraphTextAndRanges(para, font, cfg);
+        var paraUse = cloneParaWithSingleLineSegments(para);
+        var model = buildParagraphTextAndRanges(paraUse, font, cfg);
         if (!model.fullText) continue;
         var estimatedH = estimateParagraphHeight(model.fullText, cfg);
         totalH += estimatedH;
@@ -885,31 +941,6 @@ Settings are read from settings.json beside this script.
     };
     try { $.global.WORD_IMPORT_LAST_FONT_RESOLVE = out; } catch (_) {}
     return out;
-  }
-
-  function _dbgAppend(hypothesisId, location, message, data) {
-    try {
-      var scriptFile = new File($.fileName);
-      var repoRoot = scriptFile.parent;
-      var f = new File(repoRoot.fsName + "/debug-2cdb9a.log");
-      f.encoding = "UTF-8";
-      if (!f.open("a")) return;
-      try {
-        var obj = {
-          sessionId: "2cdb9a",
-          runId: "font-dropdown-debug",
-          hypothesisId: String(hypothesisId || ""),
-          location: String(location || ""),
-          message: String(message || ""),
-          data: data || {},
-          timestamp: new Date().getTime()
-        };
-        var line = (typeof JSON !== "undefined" && JSON && JSON.stringify) ? JSON.stringify(obj) : obj.toSource();
-        f.writeln(line);
-      } finally {
-        f.close();
-      }
-    } catch (_) {}
   }
 
   function findFirstExistingPostScript(candidates) {
@@ -1587,7 +1618,10 @@ Settings are read from settings.json beside this script.
       paraStyle.putBoolean(stringIDToTypeID("autoLeading"), false);
       paraStyle.putUnitDouble(stringIDToTypeID("leading"), charIDToTypeID("#Pnt"), leadPt);
       try {
-        var alignEnum = opts.centered ? stringIDToTypeID("center") : stringIDToTypeID("left");
+        var alignKey0 = opts.alignKey ? normalizeTextAlignKey(opts.alignKey) : (opts.centered ? "center" : "left");
+        var alignEnum = stringIDToTypeID("left");
+        if (alignKey0 === "right") alignEnum = stringIDToTypeID("right");
+        else if (alignKey0 === "center") alignEnum = stringIDToTypeID("center");
         paraStyle.putEnumerated(stringIDToTypeID("align"), stringIDToTypeID("alignmentType"), alignEnum);
       } catch (_) {}
 
@@ -1605,7 +1639,11 @@ Settings are read from settings.json beside this script.
       setRef.putIdentifier(charIDToTypeID("Lyr "), textLayer.id);
       setDesc.putReference(charIDToTypeID("null"), setRef);
       setDesc.putObject(charIDToTypeID("T   "), stringIDToTypeID("textLayer"), textDesc);
-      executeAction(charIDToTypeID("setd"), setDesc, DialogModes.NO);
+      try {
+        executeAction(charIDToTypeID("setd"), setDesc, DialogModes.NO);
+      } catch (_) {
+        // Older PS builds may reject paragraphStyleRange; applyParagraphTypography already set leading/justify via DOM.
+      }
     } catch (_) {}
   }
 
@@ -1617,11 +1655,10 @@ Settings are read from settings.json beside this script.
       textLayer.textItem.leading = UnitValue(lead, "pt");
     } catch (_) {}
     try {
-      if (opts.centered) {
-        textLayer.textItem.justification = Justification.CENTER;
-      } else {
-        textLayer.textItem.justification = Justification.LEFT;
-      }
+      var alignKey1 = opts.alignKey ? normalizeTextAlignKey(opts.alignKey) : (opts.centered ? "center" : "left");
+      if (alignKey1 === "right") textLayer.textItem.justification = Justification.RIGHT;
+      else if (alignKey1 === "center") textLayer.textItem.justification = Justification.CENTER;
+      else textLayer.textItem.justification = Justification.LEFT;
     } catch (_) {}
     try {
       textLayer.textItem.mojikumi = Mojikumi.NONE;
@@ -1712,12 +1749,6 @@ Settings are read from settings.json beside this script.
     var scriptFile = new File($.fileName);
     var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
     var cfg = loadSettings(settingsFile);
-    _dbgAppend("H5", "import_to_photoshop.jsx:insertBubbleParagraphCEP", "loaded cfg font candidates", {
-      regular0: cfg && cfg.fontRegularCandidates ? cfg.fontRegularCandidates[0] : null,
-      bold0: cfg && cfg.fontBoldCandidates ? cfg.fontBoldCandidates[0] : null,
-      fontHasRealBold: cfg ? !!cfg.fontHasRealBold : null,
-      settingsPath: String(settingsFile.fsName || "")
-    });
 
     var anchorMode = payload && payload.anchorMode ? String(payload.anchorMode) : "fraction";
     var docX = payload && payload.docX != null ? Number(payload.docX) : NaN;
@@ -1776,6 +1807,13 @@ Settings are read from settings.json beside this script.
         var cy = innerT + fracY * spanH;
         x = cx - bw / 2;
         y = cy - bh / 2;
+      }
+
+      if (placeAtCursorOnly) {
+        if (anchorMode === "docPoint" && !isNaN(docX) && !isNaN(docY)) {
+          x = docX;
+          y = docY;
+        }
       }
 
       // Direct placement mode: do NOT rely on bubble recognition / snapping.
@@ -1892,52 +1930,83 @@ Settings are read from settings.json beside this script.
         y = innerT;
       }
 
-      var minX = bounds.left + inset;
-      var maxX = bounds.left + bounds.width - bw - inset;
-      var minY = bounds.top + inset;
-      var maxY = bounds.top + bounds.height - bh - inset;
-      if (!isNaN(minX) && !isNaN(maxX) && minX <= maxX) {
-        if (x < minX) x = minX;
-        if (x > maxX) x = maxX;
-      }
-      if (!isNaN(minY) && !isNaN(maxY) && minY <= maxY) {
-        if (y < minY) y = minY;
-        if (y > maxY) y = maxY;
+      if (placeAtCursorOnly) {
+        var edge = 4;
+        var pxMin = bounds.left + edge;
+        var pxMax = bounds.left + bounds.width - edge;
+        var pyMin = bounds.top + edge;
+        var pyMax = bounds.top + bounds.height - edge;
+        if (!isNaN(pxMin) && !isNaN(pxMax) && pxMin <= pxMax) {
+          if (x < pxMin) x = pxMin;
+          if (x > pxMax) x = pxMax;
+        }
+        if (!isNaN(pyMin) && !isNaN(pyMax) && pyMin <= pyMax) {
+          if (y < pyMin) y = pyMin;
+          if (y > pyMax) y = pyMax;
+        }
+      } else {
+        var minX = bounds.left + inset;
+        var maxX = bounds.left + bounds.width - bw - inset;
+        var minY = bounds.top + inset;
+        var maxY = bounds.top + bounds.height - bh - inset;
+        if (!isNaN(minX) && !isNaN(maxX) && minX <= maxX) {
+          if (x < minX) x = minX;
+          if (x > maxX) x = maxX;
+        }
+        if (!isNaN(minY) && !isNaN(maxY) && minY <= maxY) {
+          if (y < minY) y = minY;
+          if (y > maxY) y = maxY;
+        }
       }
 
       var probe = createTextLayer(doc, cfg, pageNorm, paraIx);
       var font = resolveFonts(cfg, probe);
       probe.remove();
 
+      var typoOpts = resolveBubbleTypographyOpts(payload, cfg);
+
       var layer = doc.artLayers.add();
       layer.kind = LayerKind.TEXT;
       layer.name = "Bubble #" + pageNorm + "-" + paraIx;
-      layer.textItem.kind = TextType.PARAGRAPHTEXT;
-      layer.textItem.position = [x, y];
       layer.textItem.size = cfg.fontSizePt;
-      try {
-        layer.textItem.width = UnitValue(bw, "px");
-      } catch (_) {}
-      try {
-        layer.textItem.height = UnitValue(bh, "px");
-      } catch (_) {}
-      try {
-        layer.textItem.contents = " ";
-      } catch (_) {}
 
-      var model = buildParagraphTextAndRanges(para, font, cfg);
+      var model = null;
+      if (placeAtCursorOnly) {
+        var paraLine = cloneParaWithSingleLineSegments(para);
+        model = buildParagraphTextAndRanges(paraLine, font, cfg);
+        layer.textItem.kind = TextType.POINTTEXT;
+        layer.textItem.position = [x, y];
+        try {
+          layer.textItem.contents = " ";
+        } catch (_) {}
+      } else {
+        layer.textItem.kind = TextType.PARAGRAPHTEXT;
+        layer.textItem.position = [x, y];
+        try {
+          layer.textItem.width = UnitValue(bw, "px");
+        } catch (_) {}
+        try {
+          layer.textItem.height = UnitValue(bh, "px");
+        } catch (_) {}
+        try {
+          layer.textItem.contents = " ";
+        } catch (_) {}
+        model = buildParagraphTextAndRanges(para, font, cfg);
+      }
+
       if (!model.fullText || model.fullText.length === 0) {
         layer.remove();
         throw new Error("段落无法生成文本内容");
       }
       applyTextWithStyleRanges(layer, model.fullText, model.styleRanges, cfg);
-      applyParagraphTypography(layer, cfg, { centered: true });
+      applyParagraphTypography(layer, cfg, typoOpts);
 
       out.layerName = layer.name;
       out.x = x;
       out.y = y;
-      out.boxWidth = bw;
-      out.boxHeight = bh;
+      out.boxWidth = placeAtCursorOnly ? 0 : bw;
+      out.boxHeight = placeAtCursorOnly ? 0 : bh;
+      out.pointText = !!placeAtCursorOnly;
       out.boundsLeft = bounds.left;
       out.boundsTop = bounds.top;
       out.detectedBubbles = bubbleCandidates ? bubbleCandidates.length : 0;

@@ -1,12 +1,12 @@
 ﻿**********************
 Windows PowerShell transcript start
-Start time: 20260501212756
+Start time: 20260502205432
 Username: DESKTOP-5S1EKM0\Bone
 RunAs User: DESKTOP-5S1EKM0\Bone
 Configuration Name: 
 Machine: DESKTOP-5S1EKM0 (Microsoft Windows NT 10.0.22621.0)
 Host Application: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\install_cep.ps1 -NoPause
-Process ID: 8176
+Process ID: 25820
 PSVersion: 5.1.22621.3880
 PSEdition: Desktop
 PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.22621.3880
@@ -29,6 +29,7 @@ PS>TerminatingError(Copy-Item): "The running command stopped because the prefere
 [WARN] Skipping path due to permission or IO error: C:\Program Files\Common Files\Adobe\CEP\extensions
 [WARN] Access to the path 'com.word_to_photoshop.panel' is denied.
 [OK]   User environment variable set: WORD_IMPORT_REPO_PATH=C:\Users\whhai\Documents\GitHub\word-to-photoshop
+[OK]   CSXS.7 PlayerDebugMode=1 has been set
 [OK]   CSXS.8 PlayerDebugMode=1 has been set
 [OK]   CSXS.9 PlayerDebugMode=1 has been set
 [OK]   CSXS.10 PlayerDebugMode=1 has been set
@@ -44,8 +45,10 @@ PS>TerminatingError(Copy-Item): "The running command stopped because the prefere
 [OK]   CSXS.20 PlayerDebugMode=1 has been set
 
 [OK]   CEP installation completed.
-Next: restart Photoshop, then open Window > Extensions (Legacy) > Word Import CEP
+Next: restart Photoshop.
+  PS CC 2018: Window > Extensions > Word Import CEP (menu label may differ by language).
+  PS 2020+: often Window > Extensions (Legacy) > Word Import CEP
 **********************
 Windows PowerShell transcript end
-End time: 20260501212756
+End time: 20260502205432
 **********************

@@ -49,36 +49,11 @@
     cfg: null
   };
 
-  function _dbgAppend(hypothesisId, location, message, data) {
-    // #region agent log
-    try {
-      var scriptRoot = File($.fileName).parent;
-      var f = new File(scriptRoot.fsName + "/debug-cf76a1.log");
-      f.encoding = "UTF-8";
-      if (!f.open("a")) return;
-      try {
-        var obj = {
-          sessionId: "cf76a1",
-          runId: "font-dropdown-debug",
-          hypothesisId: String(hypothesisId || ""),
-          location: String(location || ""),
-          message: String(message || ""),
-          data: data || {},
-          timestamp: new Date().getTime()
-        };
-        var line = (typeof JSON !== "undefined" && JSON && JSON.stringify) ? JSON.stringify(obj) : obj.toSource();
-        f.writeln(line);
-      } finally {
-        f.close();
-      }
-    } catch (_) {}
-    // #endregion
-  }
   var DEFAULT_FONT_FAMILY_FALLBACK = ["Microsoft YaHei", "微软雅黑", "Microsoft YaHei UI"];
   var DEFAULT_FONT_REGULAR_FALLBACK = ["MicrosoftYaHei", "MicrosoftYaHeiUI", "MicrosoftYaHeiUI-Regular"];
   var DEFAULT_FONT_BOLD_FALLBACK = ["MicrosoftYaHei-Bold", "MicrosoftYaHeiUI-Bold"];
 
-  var w = new Window("palette", "漫画汉化导入助手 1.0 · 完整导入面板", undefined, { resizeable: true });
+  var w = new Window("palette", "漫画汉化导入助手 1.1 · 完整导入面板", undefined, { resizeable: true });
   w.orientation = "column";
   w.alignChildren = "fill";
   w.spacing = 10;
@@ -93,7 +68,7 @@
   var topLine = topBar.add("group");
   topLine.orientation = "row";
   topLine.alignment = "fill";
-  var brandTitle = topLine.add("statictext", undefined, "漫画汉化导入助手 1.0 · 完整导入面板");
+  var brandTitle = topLine.add("statictext", undefined, "漫画汉化导入助手 1.1 · 完整导入面板");
   var topSpacer = topLine.add("statictext", undefined, "");
   topSpacer.alignment = ["fill", "center"];
   var btnClosePanel = topLine.add("button", undefined, "×");
@@ -188,6 +163,13 @@
   btnPickFontFile.helpTip = "扫描项目 fonts/ 并刷新字体下拉项";
   var btnSaveDefaults = rowFontImport.add("button", undefined, "保存为默认");
 
+  var rowFontImport2 = cfgPanel.add("group");
+  rowFontImport2.spacing = 8;
+  var btnCopyFontToRepo = rowFontImport2.add("button", undefined, "复制字体到项目 fonts…");
+  btnCopyFontToRepo.helpTip = "选择 ttf/otf/ttc，复制到仓库 fonts/ 并尝试写入当前排版字体设置";
+  var btnInstallFontUser = rowFontImport2.add("button", undefined, "安装字体到当前用户…");
+  btnInstallFontUser.helpTip = "复制到 Windows 用户字体目录并注册（仅当前用户）；可能需要重启 PS 后在下拉中看到";
+
   var logPanel = w.add("panel", undefined, "日志");
   logPanel.orientation = "column";
   logPanel.alignChildren = "fill";
@@ -208,6 +190,8 @@
   setButtonSize(btnChooseData, 124, 28);
   setButtonSize(btnPickFontFile, 132, 28);
   setButtonSize(btnSaveDefaults, 108, 28);
+  setButtonSize(btnCopyFontToRepo, 168, 28);
+  setButtonSize(btnInstallFontUser, 168, 28);
   setButtonSize(btnImportCurrent, 188, 34);
   setButtonSize(btnImportAll, 146, 34);
   setButtonSize(btnClearLog, 92, 28);
@@ -499,11 +483,6 @@
     try {
       var all = collectInstalledFontsMappedFromProjectFonts();
       fontUiState.allEntries = all;
-      _dbgAppend("H1", "import_panel.jsx:refreshFontDropdownsFromProject", "font list collected", {
-        reason: String(reason || ""),
-        total: all ? all.length : 0,
-        sample0: all && all.length ? { family: all[0].family, style: all[0].style, ps: all[0].postScriptName } : null
-      });
 
       clearDropdown(ddRegularFont);
       clearDropdown(ddBoldFont);
@@ -562,34 +541,20 @@
       }
     } finally {
       _fontUiProgrammaticSync = false;
-      _dbgAppend("H7", "import_panel.jsx:refreshFontDropdownsFromProject", "programmatic flag reset", {
-        reason: String(reason || ""),
-        programmaticFlag: !!_fontUiProgrammaticSync
-      });
     }
   }
   function persistFontSelectionNow() {
     try {
       if (!state || !state.cfg || !state.context || !state.context.settingsFile) return;
-      _dbgAppend("H4", "import_panel.jsx:persistFontSelectionNow", "persist begin", {
-        hasCfg: !!state.cfg,
-        settingsPath: state.context && state.context.settingsFile ? String(state.context.settingsFile.fsName || "") : ""
-      });
       readCfgInputs();
       api.saveSettingsToDisk(state.context.settingsFile, state.cfg);
       updateFontPickedLabels(state.cfg);
-      _dbgAppend("H4", "import_panel.jsx:persistFontSelectionNow", "persist after save", {
-        regular0: state.cfg && state.cfg.fontRegularCandidates ? state.cfg.fontRegularCandidates[0] : null,
-        bold0: state.cfg && state.cfg.fontBoldCandidates ? state.cfg.fontBoldCandidates[0] : null,
-        fontHasRealBold: state.cfg ? !!state.cfg.fontHasRealBold : null
-      });
       log(
         "字体选择已应用: regular=" + String((state.cfg.fontRegularCandidates && state.cfg.fontRegularCandidates[0]) || "") +
         ", bold=" + String((state.cfg.fontBoldCandidates && state.cfg.fontBoldCandidates[0]) || "")
       );
     } catch (e) {
       log("字体选择保存失败: " + (e && e.message ? e.message : e));
-      _dbgAppend("H4", "import_panel.jsx:persistFontSelectionNow", "persist error", { err: String(e && e.message ? e.message : e) });
     }
   }
 
@@ -605,15 +570,6 @@
       } else {
         txtBoldPicked.text = b0 ? ("当前: " + (bLabel || b0)) : "当前: (未设置)";
       }
-      _dbgAppend("H5", "import_panel.jsx:updateFontPickedLabels", "labels refreshed from cfg", {
-        regularLabel: String(txtRegularPicked && txtRegularPicked.text ? txtRegularPicked.text : ""),
-        boldLabel: String(txtBoldPicked && txtBoldPicked.text ? txtBoldPicked.text : ""),
-        regular0: r0,
-        bold0: b0,
-        regularDisplayLabel: rLabel,
-        boldDisplayLabel: bLabel,
-        hasRealBold: cfg ? !!cfg.fontHasRealBold : null
-      });
     } catch (_) {}
   }
 
@@ -661,8 +617,8 @@
       script.encoding = "UTF-8";
       if (!script.open("w")) throw new Error("无法写入临时安装脚本");
       try {
-        script.write("$ErrorActionPreference='Stop'\r\n");
         script.write("param([string]$SourcePath)\r\n");
+        script.write("$ErrorActionPreference='Stop'\r\n");
         script.write("$fontsDir = Join-Path $env:LOCALAPPDATA 'Microsoft\\Windows\\Fonts'\r\n");
         script.write("if(-not (Test-Path $fontsDir)){ New-Item -ItemType Directory -Path $fontsDir -Force | Out-Null }\r\n");
         script.write("$src = Get-Item -LiteralPath $SourcePath\r\n");
@@ -757,6 +713,67 @@
     cfg.fontHasRealBold = !!(detected && detected.hasRealBold);
   }
 
+  function applyDetectedFontToCfgAndUi(fontFileForDetect, logLines) {
+    var detected = detectFontCandidatesFromInstalled(fontFileForDetect, state.cfg);
+    writeFontCandidatesToCfg(state.cfg, detected, fontFileForDetect);
+    api.saveSettingsToDisk(state.context.settingsFile, state.cfg);
+    refreshFontDropdownsFromProject(state.cfg, "fontFileInstall");
+    updateFontPickedLabels(state.cfg);
+    if (logLines && logLines.length) {
+      for (var li = 0; li < logLines.length; li++) log(logLines[li]);
+    }
+    log("已从字体文件更新候选字体并写入 settings.json。");
+    log("若下拉列表未显示新字体，请完全退出并重新打开 Photoshop，再点「刷新系统字体列表」。");
+  }
+
+  function pickFontFileAndIntegrate(mode) {
+    try {
+      if (!state || !state.context || !state.context.settingsFile) {
+        alert("上下文未就绪，请重新打开面板或点击「重新扫描」。");
+        return;
+      }
+      var picked = File.openDialog("选择字体文件（ttf / otf / ttc）", "*.ttf;*.otf;*.ttc");
+      if (!picked || !picked.exists) return;
+
+      var workFile = picked;
+      var extraLogs = [];
+
+      if (mode === "copy" || mode === "both") {
+        try {
+          workFile = copyToFontsFolder(picked, false);
+          extraLogs.push("已复制到项目 fonts/: " + workFile.fsName);
+        } catch (eCopy) {
+          var msg = String(eCopy && eCopy.message ? eCopy.message : eCopy);
+          if (msg.indexOf("目标已存在") >= 0) {
+            if (!confirm("fonts 目录已存在同名文件，是否覆盖？")) return;
+            workFile = copyToFontsFolder(picked, true);
+            extraLogs.push("已覆盖项目 fonts/: " + workFile.fsName);
+          } else {
+            throw eCopy;
+          }
+        }
+      }
+
+      if (mode === "install" || mode === "both") {
+        var ins = installFontForCurrentUser(picked);
+        if (!ins.ok) {
+          log("用户级字体安装失败: " + String(ins.output || "").replace(/\s+/g, " ").slice(0, 400));
+          if (mode === "install") {
+            alert("安装失败，详见日志。");
+            return;
+          }
+        } else {
+          extraLogs.push("用户级字体安装输出: " + String(ins.output || "").replace(/\s+/g, " ").slice(0, 220));
+        }
+      }
+
+      applyDetectedFontToCfgAndUi(workFile, extraLogs);
+    } catch (e) {
+      alert("字体操作失败: " + (e && e.message ? e.message : e));
+      log("字体操作失败: " + (e && e.message ? e.message : e));
+    }
+  }
+
   function ensureDefaultYaHeiBaseline(logFn) {
     try {
       var scriptRoot = File($.fileName).parent;
@@ -824,15 +841,6 @@
       cfg.fontBoldCandidates = mergeFontCandidates(regPs ? [regPs] : [], [], DEFAULT_FONT_BOLD_FALLBACK);
       cfg.fontHasRealBold = false;
     }
-    _dbgAppend("H14", "import_panel.jsx:readCfgInputs", "dropdown resolution result", {
-      regularSource: String(regularResolved && regularResolved.source ? regularResolved.source : "none"),
-      regularRawText: String(regularResolved && regularResolved.rawText ? regularResolved.rawText : ""),
-      regularPs: cfg && cfg.fontRegularCandidates && cfg.fontRegularCandidates.length ? String(cfg.fontRegularCandidates[0]) : "",
-      boldIsFaux: !!boldIsFaux,
-      boldSource: String(boldResolved && boldResolved.source ? boldResolved.source : "none"),
-      boldRawText: String(boldResolved && boldResolved.rawText ? boldResolved.rawText : ""),
-      boldPs: cfg && cfg.fontBoldCandidates && cfg.fontBoldCandidates.length ? String(cfg.fontBoldCandidates[0]) : ""
-    });
   }
 
   function writeCfgInputs(cfg) {
@@ -952,15 +960,16 @@
     }
   };
 
+  btnCopyFontToRepo.onClick = function () {
+    pickFontFileAndIntegrate("copy");
+  };
+
+  btnInstallFontUser.onClick = function () {
+    pickFontFileAndIntegrate("install");
+  };
+
   ddRegularFont.onChange = function () {
     try {
-      _dbgAppend("H2", "import_panel.jsx:ddRegularFont.onChange", "onChange fired", {
-        source: _fontUiProgrammaticSync ? "programmatic" : "user",
-        enabled: !!ddRegularFont.enabled,
-        hasSelection: !!ddRegularFont.selection,
-        selIndex: ddRegularFont.selection ? Number(ddRegularFont.selection.index) : null,
-        entries: fontUiState && fontUiState.allEntries ? fontUiState.allEntries.length : 0
-      });
       if (!_fontUiProgrammaticSync) {
         _fontUiLastUserChangeTs = new Date().getTime();
         _fontUiLastUserRegularIdx = ddRegularFont.selection ? Number(ddRegularFont.selection.index) : -1;
@@ -982,12 +991,6 @@
       }
       // Immediate UI feedback (even if saving fails).
       txtRegularPicked.text = "选择: " + String(picked.postScriptName || picked.family || "");
-      _dbgAppend("H3", "import_panel.jsx:ddRegularFont.onChange", "picked regular", {
-        idx: idx,
-        ps: String(picked.postScriptName || ""),
-        family: String(picked.family || ""),
-        style: String(picked.style || "")
-      });
 
       var autoBold = pickAutoBoldForRegular(picked);
       ddBoldFont.selection = 0;
@@ -1002,32 +1005,12 @@
       persistFontSelectionNow();
     } catch (e) {
       log("字体选择: regular onChange 异常: " + (e && e.message ? e.message : e));
-      _dbgAppend("H2", "import_panel.jsx:ddRegularFont.onChange", "onChange exception", { err: String(e && e.message ? e.message : e) });
     }
   };
-  ddRegularFont.onActivate = function () {
-    try {
-      _dbgAppend("H13", "import_panel.jsx:ddRegularFont.onActivate", "regular dropdown activated", {
-        selIndex: ddRegularFont && ddRegularFont.selection ? Number(ddRegularFont.selection.index) : null,
-        selText: ddRegularFont && ddRegularFont.selection ? String(ddRegularFont.selection.text || "") : ""
-      });
-    } catch (_) {}
-  };
-  ddRegularFont.onDeactivate = function () {
-    try {
-      _dbgAppend("H13", "import_panel.jsx:ddRegularFont.onDeactivate", "regular dropdown deactivated", {
-        selIndex: ddRegularFont && ddRegularFont.selection ? Number(ddRegularFont.selection.index) : null,
-        selText: ddRegularFont && ddRegularFont.selection ? String(ddRegularFont.selection.text || "") : ""
-      });
-    } catch (_) {}
-  };
+  ddRegularFont.onActivate = function () {};
+  ddRegularFont.onDeactivate = function () {};
   ddBoldFont.onChange = function () {
     try {
-      _dbgAppend("H2", "import_panel.jsx:ddBoldFont.onChange", "onChange fired", {
-        source: _fontUiProgrammaticSync ? "programmatic" : "user",
-        hasSelection: !!ddBoldFont.selection,
-        selIndex: ddBoldFont.selection ? Number(ddBoldFont.selection.index) : null
-      });
       if (!_fontUiProgrammaticSync) {
         _fontUiLastUserChangeTs = new Date().getTime();
         _fontUiLastUserBoldIdx = ddBoldFont.selection ? Number(ddBoldFont.selection.index) : -1;
@@ -1045,22 +1028,8 @@
       log("字体选择: bold onChange 异常: " + (e && e.message ? e.message : e));
     }
   };
-  ddBoldFont.onActivate = function () {
-    try {
-      _dbgAppend("H13", "import_panel.jsx:ddBoldFont.onActivate", "bold dropdown activated", {
-        selIndex: ddBoldFont && ddBoldFont.selection ? Number(ddBoldFont.selection.index) : null,
-        selText: ddBoldFont && ddBoldFont.selection ? String(ddBoldFont.selection.text || "") : ""
-      });
-    } catch (_) {}
-  };
-  ddBoldFont.onDeactivate = function () {
-    try {
-      _dbgAppend("H13", "import_panel.jsx:ddBoldFont.onDeactivate", "bold dropdown deactivated", {
-        selIndex: ddBoldFont && ddBoldFont.selection ? Number(ddBoldFont.selection.index) : null,
-        selText: ddBoldFont && ddBoldFont.selection ? String(ddBoldFont.selection.text || "") : ""
-      });
-    } catch (_) {}
-  };
+  ddBoldFont.onActivate = function () {};
+  ddBoldFont.onDeactivate = function () {};
 
   pageList.onChange = function () { updatePageInfo(); };
 
@@ -1091,32 +1060,9 @@
 
   btnSaveDefaults.onClick = function () {
     try {
-      _dbgAppend("H4", "import_panel.jsx:btnSaveDefaults.onClick", "save defaults click snapshot", {
-        regularSelIndex: ddRegularFont && ddRegularFont.selection ? Number(ddRegularFont.selection.index) : null,
-        boldSelIndex: ddBoldFont && ddBoldFont.selection ? Number(ddBoldFont.selection.index) : null,
-        regularSelText: ddRegularFont && ddRegularFont.selection ? String(ddRegularFont.selection.text || "") : "",
-        boldSelText: ddBoldFont && ddBoldFont.selection ? String(ddBoldFont.selection.text || "") : "",
-        lastUserChangeTs: Number(_fontUiLastUserChangeTs || 0),
-        lastUserRegularIdx: Number(_fontUiLastUserRegularIdx),
-        lastUserBoldIdx: Number(_fontUiLastUserBoldIdx)
-      });
       readCfgInputs();
-      _dbgAppend("H4", "import_panel.jsx:btnSaveDefaults.onClick", "save defaults after readCfgInputs", {
-        regular0: state.cfg && state.cfg.fontRegularCandidates ? state.cfg.fontRegularCandidates[0] : null,
-        bold0: state.cfg && state.cfg.fontBoldCandidates ? state.cfg.fontBoldCandidates[0] : null
-      });
       api.saveSettingsToDisk(state.context.settingsFile, state.cfg);
       updateFontPickedLabels(state.cfg);
-      _dbgAppend("H12", "import_panel.jsx:btnSaveDefaults.onClick", "forced label refresh after save", {
-        regularLabel: String(txtRegularPicked && txtRegularPicked.text ? txtRegularPicked.text : ""),
-        boldLabel: String(txtBoldPicked && txtBoldPicked.text ? txtBoldPicked.text : "")
-      });
-      _dbgAppend("H5", "import_panel.jsx:btnSaveDefaults.onClick", "save defaults after disk write", {
-        regularLabelAfterSave: String(txtRegularPicked && txtRegularPicked.text ? txtRegularPicked.text : ""),
-        boldLabelAfterSave: String(txtBoldPicked && txtBoldPicked.text ? txtBoldPicked.text : ""),
-        regular0: state.cfg && state.cfg.fontRegularCandidates ? state.cfg.fontRegularCandidates[0] : null,
-        bold0: state.cfg && state.cfg.fontBoldCandidates ? state.cfg.fontBoldCandidates[0] : null
-      });
       log("已保存当前参数到 settings.json");
     } catch (e) {
       alert("保存设置失败: " + e.message);
@@ -1152,17 +1098,7 @@
   };
 
   loadContextAndBinding();
-  w.onActivate = function () {
-    try {
-      _dbgAppend("H6", "import_panel.jsx:w.onActivate", "window activate snapshot", {
-        programmaticFlag: !!_fontUiProgrammaticSync,
-        regularSelIndex: ddRegularFont && ddRegularFont.selection ? Number(ddRegularFont.selection.index) : null,
-        boldSelIndex: ddBoldFont && ddBoldFont.selection ? Number(ddBoldFont.selection.index) : null,
-        regularSelText: ddRegularFont && ddRegularFont.selection ? String(ddRegularFont.selection.text || "") : "",
-        boldSelText: ddBoldFont && ddBoldFont.selection ? String(ddBoldFont.selection.text || "") : ""
-      });
-    } catch (_) {}
-  };
+  w.onActivate = function () {};
   w.onResizing = w.onResize = function () { this.layout.resize(); };
   w.center();
   $.global.WORD_IMPORT_PANEL_WINDOW = w;

@@ -64,7 +64,8 @@ try {
   [Environment]::SetEnvironmentVariable("WORD_IMPORT_REPO_PATH", $scriptDir, "User")
   Write-Ok "User environment variable set: WORD_IMPORT_REPO_PATH=$scriptDir"
 
-  $csxsVersions = 8..20
+  # CC 2017 uses CSXS.7; CC 2018 uses CSXS.8 — enable unsigned panels for both + newer runtimes.
+  $csxsVersions = 7..20
   foreach ($v in $csxsVersions) {
     $keyPath = "HKCU:\Software\Adobe\CSXS.$v"
     Ensure-Dir $keyPath
@@ -74,7 +75,9 @@ try {
 
   Write-Host ""
   Write-Ok "CEP installation completed."
-  Write-Host "Next: restart Photoshop, then open Window > Extensions (Legacy) > Word Import CEP"
+  Write-Host "Next: restart Photoshop."
+  Write-Host "  PS CC 2018: Window > Extensions > Word Import CEP (menu label may differ by language)."
+  Write-Host "  PS 2020+: often Window > Extensions (Legacy) > Word Import CEP"
 } catch {
   Write-ErrMsg $_.Exception.Message
   try { Write-Host "Log file: $logFile" } catch {}

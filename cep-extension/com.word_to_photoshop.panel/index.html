@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>漫画汉化导入助手 1.0</title>
+    <title>漫画汉化导入助手 1.1</title>
     <link rel="stylesheet" href="./client/style.css" />
   </head>
   <body>
@@ -12,7 +12,7 @@
       <header class="appHeader">
         <div class="appTitleRow">
           <span class="appMark" aria-hidden="true"></span>
-          <h1 class="appTitle">漫画汉化导入助手 1.0</h1>
+          <h1 class="appTitle">漫画汉化导入助手 1.1</h1>
         </div>
         <p class="appLead">
           CEP 提供快捷入口；完整选项由 <kbd>导入面板</kbd> 与脚本核心处理。
@@ -28,6 +28,12 @@
             打开/关闭完整导入面板
           </button>
           <p class="sectionHint">推荐：页码、当前页导入等完整流程</p>
+          <button type="button" id="btnCheckUpdate" class="btnGhost btnWide">
+            检查更新（测试中）
+          </button>
+          <p class="sectionHint">
+            当前打开腾讯文档说明页（测试中）；与远程版本 JSON 无关。
+          </p>
         </section>
 
         <section class="panelSection" aria-label="工作流程">
@@ -84,6 +90,12 @@
           <div class="quoteToolbar">
             <label for="pageSelect">页码</label>
             <select id="pageSelect"></select>
+          </div>
+          <div class="quoteToolbar alignToolbar" aria-label="画布投放文字对齐">
+            <span class="alignLabel">对齐</span>
+            <button type="button" id="btnAlignLeft" class="miniBtn" title="左对齐">左</button>
+            <button type="button" id="btnAlignCenter" class="miniBtn" title="居中">中</button>
+            <button type="button" id="btnAlignRight" class="miniBtn" title="右对齐">右</button>
           </div>
           <div id="quoteList" class="quoteList"></div>
         </section>

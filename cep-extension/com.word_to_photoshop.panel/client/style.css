@@ -19,6 +19,35 @@ body {
   flex-direction: column;
 }
 
+.noCepBanner {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(160, 48, 40, 0.42), rgba(90, 28, 24, 0.32));
+  border-bottom: 1px solid rgba(255, 130, 110, 0.35);
+  color: #ffd8d2;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.noCepBanner strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.noCepBanner kbd,
+.noCepBanner code {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
 .appHeader {
   padding: 14px 16px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -229,6 +258,18 @@ button:active {
 .miniBtnPrimary {
   border-color: rgba(47, 137, 239, 0.55);
   background: rgba(47, 137, 239, 0.22);
+  color: #f5f9ff;
+}
+
+.alignToolbar .alignLabel {
+  font-size: 12px;
+  color: rgba(232, 234, 239, 0.55);
+  margin-right: 2px;
+}
+
+.miniBtn.alignActive {
+  border-color: rgba(47, 137, 239, 0.65);
+  background: rgba(47, 137, 239, 0.35);
   color: #f5f9ff;
 }
 

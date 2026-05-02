@@ -1,9 +1,22 @@
 @echo off
-setlocal
+setlocal EnableExtensions
+chcp 65001 >nul
 cd /d "%~dp0"
 
+title word-to-photoshop CEP full reinstall
+
+echo.
+echo ============================================================
+echo   CEP full reinstall only (ASCII-safe .cmd)
+echo   Repo: %CD%
+echo   This will kill PS-related processes, uninstall, install, then try to start PS.
+echo ============================================================
+echo.
+pause
+
+echo.
 echo ==========================================
-echo [1/4] Kill Photoshop related processes
+echo [1/4] Stop Photoshop / CEP related processes
 echo ==========================================
 for %%P in (
   "Photoshop.exe"
@@ -17,7 +30,7 @@ for %%P in (
 ) do (
   taskkill /F /IM "%%~P" >nul 2>&1
 )
-echo [OK] Kill step done
+echo [OK] kill step done
 echo.
 
 echo ==========================================
@@ -25,12 +38,11 @@ echo [2/4] Uninstall CEP
 echo ==========================================
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\uninstall_cep.ps1" -NoPause
 if errorlevel 1 (
-  echo [ERR] Uninstall failed
-  echo.
+  echo [ERR] uninstall failed
   pause
   exit /b 1
 )
-echo [OK] Uninstall done
+echo [OK] uninstall done
 echo.
 
 echo ==========================================
@@ -38,15 +50,14 @@ echo [3/4] Install CEP
 echo ==========================================
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\install_cep.ps1" -NoPause
 if errorlevel 1 (
-  echo [ERR] Install failed
-  echo.
+  echo [ERR] install failed
   pause
   exit /b 1
 )
 
 echo.
 echo ==========================================
-echo [4/4] Launch Photoshop
+echo [4/4] Try start Photoshop
 echo ==========================================
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='SilentlyContinue';" ^
@@ -64,12 +75,12 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
   "  }" ^
   "}" ^
   "if($exe){" ^
-  "  try { Start-Process -FilePath $exe | Out-Null; Write-Host ('[OK] Photoshop launched: ' + $exe) } catch { Write-Host ('[WARN] Failed to launch Photoshop: ' + $_.Exception.Message) }" ^
+  "  try { Start-Process -FilePath $exe | Out-Null; Write-Host ('[OK] Photoshop: ' + $exe) } catch { Write-Host ('[WARN] launch: ' + $_.Exception.Message) }" ^
   "} else {" ^
-  "  Write-Host '[WARN] Photoshop.exe not found via PATH or registry App Paths.';" ^
+  "  Write-Host '[WARN] Photoshop.exe not found.';" ^
   "}"
 
 echo.
-echo [OK] Reinstall completed
+echo [OK] full reinstall done
 pause
 exit /b 0
