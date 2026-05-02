@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>漫画汉化导入助手</title>
+    <title>漫画汉化导入助手 1.0</title>
     <link rel="stylesheet" href="./client/style.css" />
   </head>
   <body>
@@ -12,7 +12,7 @@
       <header class="appHeader">
         <div class="appTitleRow">
           <span class="appMark" aria-hidden="true"></span>
-          <h1 class="appTitle">漫画汉化导入助手</h1>
+          <h1 class="appTitle">漫画汉化导入助手 1.0</h1>
         </div>
         <p class="appLead">
           CEP 提供快捷入口；完整选项由 <kbd>导入面板</kbd> 与脚本核心处理。
@@ -25,7 +25,7 @@
             <span class="sectionTitle">常用</span>
           </div>
           <button type="button" id="btnOpenPanel" class="btnPrimary btnWide">
-            打开完整导入面板
+            打开/关闭完整导入面板
           </button>
           <p class="sectionHint">推荐：页码、当前页导入等完整流程</p>
         </section>
@@ -37,10 +37,7 @@
           <button type="button" id="btnExportDocx" class="btnWide">
             将翻译稿（docx.)转换为导入数据
           </button>
-          <div class="quoteToolbar" style="margin-top:8px">
-            <button type="button" id="btnGenMasks" class="miniBtn">生成黑白mask（mask/目录）</button>
-          </div>
-          <p class="sectionHint">将自动在当前目录创建 mask/ 并生成每页二值黑白图（白=气泡）。后续投放将按当前页自动读取。</p>
+          <p class="sectionHint">常规流程：先绑定/刷新数据，再从下方逐条台词投放到画布。</p>
         </section>
 
         <section class="panelSection dangerZone" aria-label="危险操作">
@@ -67,6 +64,10 @@
             <button type="button" id="btnClearSelRect" class="miniBtn">清除锁定目标框</button>
             <button type="button" id="btnDiagSel" class="miniBtn">诊断当前选区</button>
           </div>
+          <div class="quoteToolbar" style="margin-top:8px">
+            <button type="button" id="btnGenMasks" class="miniBtn">生成黑白mask（mask/目录）</button>
+          </div>
+          <p class="sectionHint">高级工具：在当前目录创建 mask/ 并生成每页二值黑白图（白=气泡）。</p>
           <p class="sectionHint">隐藏入口：在标题“漫画汉化导入助手”上连点 6 次。</p>
         </section>
 

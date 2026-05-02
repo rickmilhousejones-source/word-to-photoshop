@@ -54,6 +54,8 @@ $.global.WORD_IMPORT_CEP.clearImportedDialogues = function () {
 $.global.WORD_IMPORT_CEP._sanitizePathText = function (raw) {
   var s = String(raw == null ? "" : raw);
   if (s.length && s.charCodeAt(0) === 0xFEFF) s = s.substring(1);
+  // Windows PowerShell may write marker files as UTF-16LE; strip embedded NULs.
+  s = s.replace(/\u0000/g, "");
   s = s.replace(/\r/g, "").replace(/\n/g, "");
   while (s.length && (s.charAt(0) === " " || s.charAt(0) === "\t" || s.charAt(0) === "\"" || s.charAt(0) === "'")) s = s.substring(1);
   while (s.length && (s.charAt(s.length - 1) === " " || s.charAt(s.length - 1) === "\t" || s.charAt(s.length - 1) === "\"" || s.charAt(s.length - 1) === "'")) s = s.substring(0, s.length - 1);
@@ -1041,6 +1043,13 @@ $.global.WORD_IMPORT_CEP.clearBubbleBoxesFile = function (repoRootHint) {
 
 $.global.WORD_IMPORT_CEP.listQuotes = function (repoRootHint) {
   try {
+    // #region agent log
+    try {
+      if (typeof fetch === "function") {
+        fetch('http://127.0.0.1:7706/ingest/e060ea63-a144-43df-ae0b-adf401789755',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2cdb9a'},body:JSON.stringify({sessionId:'2cdb9a',runId:'font-dropdown-debug',hypothesisId:'H8',location:'host/main.jsx:listQuotes:entry',message:'listQuotes called',data:{repoRootHint:String(repoRootHint||''),documents:app.documents?app.documents.length:null},timestamp:new Date().getTime()})}).catch(function(){});
+      }
+    } catch (_) {}
+    // #endregion
     if (app.name !== "Adobe Photoshop") return "ERR|请在 Photoshop 中运行";
     var api = $.global.WORD_IMPORT_CEP._loadCoreApi(repoRootHint);
     var ctx = api.buildDefaultContext();
@@ -1078,6 +1087,13 @@ $.global.WORD_IMPORT_CEP.listQuotes = function (repoRootHint) {
     }
     return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON(result);
   } catch (e) {
+    // #region agent log
+    try {
+      if (typeof fetch === "function") {
+        fetch('http://127.0.0.1:7706/ingest/e060ea63-a144-43df-ae0b-adf401789755',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'2cdb9a'},body:JSON.stringify({sessionId:'2cdb9a',runId:'font-dropdown-debug',hypothesisId:'H8',location:'host/main.jsx:listQuotes:error',message:'listQuotes failed',data:{error:String(e&&e.message?e.message:e),line:e&&e.line?Number(e.line):null},timestamp:new Date().getTime()})}).catch(function(){});
+      }
+    } catch (_) {}
+    // #endregion
     return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
   }
 };
@@ -1230,6 +1246,76 @@ $.global.WORD_IMPORT_CEP.diagnoseSelection = function () {
   }
 };
 
+$.global.WORD_IMPORT_CEP._clearAllColorSamplers = function (doc) {
+  try {
+    if (!doc || !doc.colorSamplers) return 0;
+    var samplers = doc.colorSamplers;
+    var removed = 0;
+    var n = Number(samplers.length || 0);
+    for (var i = n; i >= 1; i--) {
+      try {
+        var sp = null;
+        try { sp = samplers[i]; } catch (_) { sp = null; }
+        if (!sp) {
+          try { sp = samplers[i - 1]; } catch (_) { sp = null; }
+        }
+        if (!sp) continue;
+        sp.remove();
+        removed++;
+      } catch (_) {}
+    }
+    return removed;
+  } catch (_) {
+    return 0;
+  }
+};
+
+$.global.WORD_IMPORT_CEP._setCurrentToolSafe = function (toolName) {
+  try {
+    app.currentTool = String(toolName || "");
+    return true;
+  } catch (_) {
+    return false;
+  }
+};
+
+$.global.WORD_IMPORT_CEP.beginSamplerAnchorMode = function () {
+  try {
+    if (app.name !== "Adobe Photoshop") return "ERR|请在 Photoshop 中运行";
+    if (app.documents.length <= 0) return "ERR|请先打开 PSD 文档";
+    var doc = app.activeDocument;
+    var prevTool = "";
+    try { prevTool = String(app.currentTool || ""); } catch (_) { prevTool = ""; }
+    $.global.WORD_IMPORT_CEP_LAST_TOOL = prevTool;
+    var removed = $.global.WORD_IMPORT_CEP._clearAllColorSamplers(doc);
+    $.global.WORD_IMPORT_CEP._setCurrentToolSafe("colorSamplerTool");
+    return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON({
+      previousTool: prevTool,
+      removedSamplers: removed,
+      currentTool: String(app.currentTool || "")
+    });
+  } catch (e) {
+    return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
+  }
+};
+
+$.global.WORD_IMPORT_CEP.finishSamplerAnchorMode = function () {
+  try {
+    if (app.name !== "Adobe Photoshop") return "ERR|请在 Photoshop 中运行";
+    if (app.documents.length <= 0) return "ERR|请先打开 PSD 文档";
+    var doc = app.activeDocument;
+    var removed = $.global.WORD_IMPORT_CEP._clearAllColorSamplers(doc);
+    // User-requested: always return to move tool after one placement.
+    $.global.WORD_IMPORT_CEP._setCurrentToolSafe("moveTool");
+    return "OK|" + $.global.WORD_IMPORT_CEP._encodeJSON({
+      removedSamplers: removed,
+      currentTool: String(app.currentTool || "")
+    });
+  } catch (e) {
+    return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
+  }
+};
+
 $.global.WORD_IMPORT_CEP.insertBubbleText = function (payloadText, repoRootHint) {
   try {
     if (app.name !== "Adobe Photoshop") return "ERR|请在 Photoshop 中运行";
@@ -1328,7 +1414,27 @@ $.global.WORD_IMPORT_CEP.insertBubbleText = function (payloadText, repoRootHint)
       return out;
     }
 
-    var samplerInfo = resolveSamplerPoint(doc);
+    function resolveSamplerPointWithRetry(doc0, retryCount, waitMs) {
+      var maxTry = Number(retryCount);
+      if (!isFinite(maxTry) || maxTry < 1) maxTry = 1;
+      var pause = Number(waitMs);
+      if (!isFinite(pause) || pause < 0) pause = 0;
+      for (var ti = 0; ti < maxTry; ti++) {
+        var one = resolveSamplerPoint(doc0);
+        if (one && one.point) return one;
+        if (ti < maxTry - 1 && pause > 0) {
+          try { $.sleep(pause); } catch (_) {}
+        }
+      }
+      return resolveSamplerPoint(doc0);
+    }
+
+    var samplerInfo = resolveSamplerPointWithRetry(doc, 4, 60);
+    // First click with colorSamplerTool can arrive slightly before sampler point is committed.
+    // In direct-place flow, wait a bit longer to capture that first point and avoid second-click-only behavior.
+    if ((!samplerInfo || !samplerInfo.point) && payload && payload.placeAtCursorOnly) {
+      samplerInfo = resolveSamplerPointWithRetry(doc, 16, 80);
+    }
     var pointFromSampler = samplerInfo.point;
     var probe = null;
     var probeFromPayload = false;

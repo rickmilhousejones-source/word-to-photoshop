@@ -273,7 +273,9 @@
       return;
     }
     var down = !!o.lmbDown;
-    var edge = down && !lastProbeLmbDown;
+    var wasDown = !!lastProbeLmbDown;
+    var edgeDown = down && !wasDown;
+    var edgeUp = !down && wasDown;
     lastProbeLmbDown = down;
     if (requireMouseUpBeforeTrigger) {
       if (!down) requireMouseUpBeforeTrigger = false;
@@ -339,13 +341,14 @@
       }
     }
 
-    // Primary trigger: rising edge only (one physical click => one placement).
-    var shouldAttempt = edge;
+    // Primary trigger: release edge (mouseup). For color sampler, point is committed after click completes.
+    var shouldAttempt = edgeUp;
     if (shouldAttempt) {
       // #region agent log
       debugLog("H1", "client/main.js:tickPlacementWatch", "trigger condition passed", {
         down: down,
-        edge: edge,
+        edgeDown: edgeDown,
+        edgeUp: edgeUp,
         cursorX: Number(o.cursorX),
         cursorY: Number(o.cursorY)
       });
@@ -454,6 +457,13 @@
       hasSegments: !!(item && item.segments && item.segments.length)
     });
     // #endregion
+    callHost("WORD_IMPORT_CEP.beginSamplerAnchorMode()", function (r) {
+      if (r && r.indexOf("OK|") === 0) {
+        log("已切换到颜色取样点工具，请在画布单击一次目标位置。");
+      } else {
+        log("切换颜色取样点工具失败，将继续使用原有点击映射: " + String(r || "UNKNOWN_ERROR"));
+      }
+    });
     suppressTriggerUntilTs = Date.now() + 700;
     schedulePlacementArm();
   }
@@ -521,6 +531,14 @@
           resultHead: String(result0 || "").slice(0, 160)
         });
         // #endregion
+        function finalizeSamplerAndEnd() {
+          callHost("WORD_IMPORT_CEP.finishSamplerAnchorMode()", function (r2) {
+            if (!(r2 && r2.indexOf("OK|") === 0)) {
+              log("恢复移动工具/清理取样点失败: " + String(r2 || "UNKNOWN_ERROR"));
+            }
+            end();
+          });
+        }
         if (result0 && result0.indexOf("OK|") === 0) {
           var info0 = decodePayload(result0.slice(3)) || {};
           // #region agent log
@@ -556,7 +574,7 @@
         } else {
           log("投放失败: " + (result0 || "UNKNOWN_ERROR"));
         }
-        end();
+        finalizeSamplerAndEnd();
       });
       return;
     }
@@ -953,5 +971,5 @@
   renderPageOptions();
   renderQuoteList();
   reloadQuotes();
-  log("漫画汉化导入助手（CEP）已启动。build=" + BUILD_ID);
+  log("漫画汉化导入助手 1.0（CEP）已启动。build=" + BUILD_ID);
 })();
