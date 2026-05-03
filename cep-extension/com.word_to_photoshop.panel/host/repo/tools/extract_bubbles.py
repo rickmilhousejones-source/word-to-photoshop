@@ -20,25 +20,6 @@ from typing import Dict, List, Sequence
 import cv2
 import numpy as np
 
-DEBUG_LOG_PATH = Path(__file__).resolve().parent.parent / "debug-491474.log"
-
-
-def debug_log(hypothesis_id: str, location: str, message: str, data: Dict[str, object]) -> None:
-    try:
-        payload = {
-            "sessionId": "491474",
-            "runId": "bubble-gen-debug-1",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-        }
-        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
 
 @dataclass
 class BubbleBox:
@@ -116,12 +97,6 @@ def is_probably_binary_mask(gray: np.ndarray) -> bool:
         return False
     near_binary = np.logical_or(gray <= 12, gray >= 243)
     ratio = float(np.count_nonzero(near_binary)) / float(gray.size)
-    debug_log(
-        "H1",
-        "tools/extract_bubbles.py:is_probably_binary_mask",
-        "binary ratio computed",
-        {"ratio": ratio, "size": int(gray.size)},
-    )
     return ratio >= 0.94
 
 
@@ -295,16 +270,6 @@ def write_visualization(image_path: Path, page: str, boxes: Sequence[BubbleBox],
 
 def main() -> int:
     args = parse_args()
-    debug_log(
-        "H2",
-        "tools/extract_bubbles.py:main:start",
-        "extract bubbles started",
-        {
-            "maskDir": str(args.mask_dir),
-            "output": str(args.output),
-            "forcePage": str(args.force_page or ""),
-        },
-    )
     if not args.mask_dir.exists():
         raise SystemExit(f"Mask directory not found: {args.mask_dir}")
 
@@ -327,22 +292,10 @@ def main() -> int:
             continue
         bgr = cv2.imread(str(mask_path), cv2.IMREAD_COLOR)
         if bgr is None:
-            debug_log(
-                "H3",
-                "tools/extract_bubbles.py:main:read",
-                "skip unreadable image",
-                {"file": mask_path.name},
-            )
             continue
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         is_binary = is_probably_binary_mask(gray)
         if not is_binary:
-            debug_log(
-                "H4",
-                "tools/extract_bubbles.py:main:non_binary_fallback",
-                "non binary image uses otsu fallback",
-                {"file": mask_path.name},
-            )
             processed = postprocess_non_binary_from_color(bgr, args.morph_close_kernel)
             boxes, pass_name = extract_boxes_non_binary(processed, args)
         else:

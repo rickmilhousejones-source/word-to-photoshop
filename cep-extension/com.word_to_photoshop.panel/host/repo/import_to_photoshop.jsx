@@ -9,6 +9,7 @@ On first launch, the file is initialized from the bundled settings.default.json
 */
 
 (function () {
+
   function runQuickImport() {
     if (app.name !== "Adobe Photoshop") {
       alert("请在 Photoshop 中运行此脚本。");
@@ -248,7 +249,8 @@ On first launch, the file is initialized from the bundled settings.default.json
       rememberLastDataFile: true,
       lastDataFile: "",
       textColorRgb: [34, 34, 34],
-      bubbleTextAlign: "center"
+      bubbleTextAlign: "center",
+      useParagraphLeadingActionManager: false
     };
 
     if (!f.exists) {
@@ -274,7 +276,18 @@ On first launch, the file is initialized from the bundled settings.default.json
     var out = {};
     var key;
     for (key in base) out[key] = base[key];
-    for (key in override) out[key] = override[key];
+    for (key in override) {
+      var val = override[key];
+      if (
+        (key === "fontRegularCandidates" || key === "fontBoldCandidates" || key === "fontFamilyNames") &&
+        val &&
+        val instanceof Array &&
+        val.length === 0
+      ) {
+        continue;
+      }
+      out[key] = val;
+    }
     return out;
   }
 
@@ -453,6 +466,93 @@ On first launch, the file is initialized from the bundled settings.default.json
       .replace(/\n/g, "\\n")
       .replace(/\t/g, "\\t") + "\"";
   }
+
+  // #region agent log
+  function dbgSanitize(value, depth) {
+    if (depth > 8) return "[max depth]";
+    if (value === null || value === undefined) return null;
+    var t = typeof value;
+    if (t === "number" || t === "boolean") return value;
+    if (t === "string") return value;
+    if (t === "function") return "[function]";
+    if (value instanceof Array) {
+      var a = [];
+      var i;
+      for (i = 0; i < value.length; i++) a.push(dbgSanitize(value[i], depth + 1));
+      return a;
+    }
+    if (t === "object") {
+      var o = {};
+      var k;
+      for (k in value) {
+        if (!value.hasOwnProperty(k)) continue;
+        try {
+          o[k] = dbgSanitize(value[k], depth + 1);
+        } catch (_) {
+          o[k] = "[unreadable]";
+        }
+      }
+      return o;
+    }
+    try {
+      return String(value);
+    } catch (_) {
+      return "[value]";
+    }
+  }
+  function agentDbgLog(location, message, data, hypothesisId) {
+    try {
+      var logF = null;
+      try {
+        var uf = getUserDataFolder();
+        if (uf && uf.exists) logF = new File(uf.fsName + "/debug-34d76a.log");
+      } catch (_) {}
+      if (!logF) logF = new File(File($.fileName).parent.fsName + "/debug-34d76a.log");
+      logF.encoding = "UTF8";
+      var payload = {
+        sessionId: "34d76a",
+        location: String(location || ""),
+        message: String(message || ""),
+        data: dbgSanitize(data != null ? data : {}, 0),
+        hypothesisId: String(hypothesisId || ""),
+        timestamp: new Date().getTime()
+      };
+      var line = "";
+      try {
+        if (typeof JSON !== "undefined" && JSON && JSON.stringify) {
+          line = JSON.stringify(payload);
+        } else {
+          line = toJSON(payload);
+        }
+      } catch (_) {
+        try {
+          line = toJSON(payload);
+        } catch (_) {
+          line = '{"sessionId":"34d76a","message":"log_serialize_failed"}';
+        }
+      }
+      var prev = "";
+      try {
+        if (logF.exists) {
+          logF.open("r");
+          try {
+            prev = logF.read();
+          } finally {
+            logF.close();
+          }
+        }
+      } catch (_) {}
+      try {
+        logF.open("w");
+        try {
+          logF.write(prev + line + "\r\n");
+        } finally {
+          logF.close();
+        }
+      } catch (_) {}
+    } catch (_) {}
+  }
+  // #endregion
 
   function normalizePageNumber(value) {
     var s = String(value).replace(/^#/, "").replace(/\s+/g, "");
@@ -640,6 +740,24 @@ On first launch, the file is initialized from the bundled settings.default.json
       try {
         applyTextWithStyleRanges(layer, item.fullText, item.styleRanges, cfg);
         applyParagraphTypography(layer, cfg, typographyOptsFromAlignKey("left"));
+        var rangesPost = item.styleRanges || [];
+        var uniqPsPost = {};
+        var rpi;
+        for (rpi = 0; rpi < rangesPost.length; rpi++) {
+          var psP = rangesPost[rpi].style && rangesPost[rpi].style.fontPostScriptName ? String(rangesPost[rpi].style.fontPostScriptName) : "";
+          if (psP) uniqPsPost[psP] = true;
+        }
+        var ksPost = [];
+        for (var kp in uniqPsPost) if (uniqPsPost.hasOwnProperty(kp)) ksPost.push(kp);
+        // applyParagraphTypography（颜色/对齐/行距等 DOM）可能冲掉 AM 写入的字符样式；多字体时已二次 apply。
+        // 单字体整段（ksPost.length===1）若仅用 tryApplyDomTextFont，仍会变成缺字替换黑体 — 必须用完整样式管线再写回。
+        if (ksPost.length >= 1) {
+          applyTextWithStyleRanges(layer, item.fullText, item.styleRanges, cfg);
+        }
+        // 二次 AM 会恢复文档默认的东亚排版（如「间距组合 2」）；需再应用段落/字距 DOM。
+        try {
+          applyParagraphTypography(layer, cfg, typographyOptsFromAlignKey("left"));
+        } catch (_) {}
         importedCount++;
       } catch (e) {
         try { layer.textItem.contents = item.fullText; } catch (_) {}
@@ -996,6 +1114,125 @@ On first launch, the file is initialized from the bundled settings.default.json
     return layer;
   }
 
+  /** 候选里是否含有「黑体/Heiti」字样（命中时允许接受 AdobeHeitiStd 这类替换结果）。 */
+  function candidatesAskForHeiti(cfg) {
+    function listHas(arr) {
+      if (!arr) return false;
+      var a = arr instanceof Array ? arr : [arr];
+      var i;
+      for (i = 0; i < a.length; i++) {
+        var s = String(a[i] == null ? "" : a[i]);
+        if (/heiti|黑体/i.test(s)) return true;
+      }
+      return false;
+    }
+    return (
+      listHas(cfg && cfg.fontRegularCandidates) ||
+      listHas(cfg && cfg.fontFamilyNames) ||
+      listHas(cfg && cfg.fontBoldCandidates)
+    );
+  }
+
+  /**
+   * 当 PostScript 遍历匹配失败时，用 DOM 直接赋 font 字符串让 Photoshop 解析（界面名/别名往往只有这条路能命中）。
+   * 避免立刻退回「探测层默认字体」（中文版常为 Adobe Heiti）。
+   * 若 PS 把字符串静默替换为黑体（且候选里并未要求黑体），视为失败，不接受。
+   */
+  function tryResolveFontViaTextItem(textLayer, cfg) {
+    if (!textLayer || !textLayer.textItem || !cfg) return null;
+    var baseFontStr = "";
+    try {
+      var bf = textLayer.textItem.font;
+      if (bf && bf.postScriptName) baseFontStr = String(bf.postScriptName);
+      else baseFontStr = String(bf || "");
+      baseFontStr = String(baseFontStr).replace(/^\s+|\s+$/g, "");
+    } catch (_) {}
+    var allowHeiti = candidatesAskForHeiti(cfg);
+    var seq = [];
+    function pushUnique(arr) {
+      if (!arr) return;
+      var a = arr instanceof Array ? arr : [arr];
+      var i;
+      for (i = 0; i < a.length; i++) {
+        var s = String(a[i] == null ? "" : a[i]).replace(/^\s+|\s+$/g, "");
+        if (!s) continue;
+        var dup = false;
+        var j;
+        for (j = 0; j < seq.length; j++) {
+          if (String(seq[j]).toLowerCase() === s.toLowerCase()) {
+            dup = true;
+            break;
+          }
+        }
+        if (!dup) seq.push(s);
+      }
+    }
+    pushUnique(cfg.fontRegularCandidates);
+    pushUnique(cfg.fontFamilyNames);
+    var ti;
+    for (ti = 0; ti < seq.length; ti++) {
+      var token = seq[ti];
+      try {
+        textLayer.textItem.font = token;
+        var ap = textLayer.textItem.font;
+        var apStr = "";
+        try {
+          if (ap && ap.postScriptName) apStr = String(ap.postScriptName);
+          else apStr = String(ap || "");
+        } catch (_) {
+          apStr = "";
+        }
+        apStr = String(apStr).replace(/^\s+|\s+$/g, "");
+        if (!apStr) continue;
+        if (
+          baseFontStr &&
+          String(apStr).toLowerCase() === String(baseFontStr).toLowerCase()
+        ) {
+          // #region agent log
+          try {
+            agentDbgLog(
+              "import_to_photoshop.jsx:tryResolveFontViaTextItem",
+              "dom_apply_no_change",
+              { token: token, apStr: apStr, baseFontStr: baseFontStr, index: ti },
+              "H_domProbe"
+            );
+          } catch (_) {}
+          // #endregion
+          continue;
+        }
+        if (!allowHeiti && /^AdobeHeiti/i.test(apStr)) {
+          // #region agent log
+          try {
+            agentDbgLog(
+              "import_to_photoshop.jsx:tryResolveFontViaTextItem",
+              "dom_apply_silent_heiti_substitute",
+              { token: token, apStr: apStr, index: ti },
+              "H_domProbe"
+            );
+          } catch (_) {}
+          // #endregion
+          continue;
+        }
+        var f = findFontByPostScript(apStr);
+        if (!f) f = getFontByNameLoose(apStr);
+        if (f && f.postScriptName) {
+          // #region agent log
+          try {
+            agentDbgLog(
+              "import_to_photoshop.jsx:tryResolveFontViaTextItem",
+              "dom_apply_ok",
+              { token: token, resolvedPs: String(f.postScriptName), index: ti },
+              "H_domProbe"
+            );
+          } catch (_) {}
+          // #endregion
+          return f;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+
   function resolveFonts(cfg, textLayer) {
     var regular = null;
     var bold = null;
@@ -1006,6 +1243,55 @@ On first launch, the file is initialized from the bundled settings.default.json
     if (!regular) regular = findFirstMatchingFamily(cfg.fontFamilyNames, ["Regular", "常规"]);
     if (!bold) bold = findFirstMatchingFamily(cfg.fontFamilyNames, ["Bold", "粗体"]);
     if (!regular) regular = findFirstFamily(cfg.fontFamilyNames);
+    // #region agent log
+    try {
+      var fn0 =
+        cfg && cfg.fontFamilyNames && cfg.fontFamilyNames.length
+          ? String(cfg.fontFamilyNames[0])
+          : "";
+      agentDbgLog(
+        "import_to_photoshop.jsx:resolveFonts",
+        "after_findFirstFamily",
+        {
+          runId: "verify",
+          firstFamilyName: fn0,
+          resolvedYet: !!(regular && regular.postScriptName),
+          resolvedPsPreview:
+            regular && regular.postScriptName ? String(regular.postScriptName).slice(0, 80) : ""
+        },
+        "H_nameMatch"
+      );
+    } catch (_) {}
+    // #endregion
+    if (!regular) regular = tryResolveFontViaTextItem(textLayer, cfg);
+    var regHadCandidates = !!(
+      cfg &&
+      ((cfg.fontRegularCandidates && cfg.fontRegularCandidates.length) ||
+        (cfg.fontFamilyNames && cfg.fontFamilyNames.length))
+    );
+    if (!regular && regHadCandidates) {
+      var crPv = [];
+      try {
+        var crSrc = (cfg && cfg.fontRegularCandidates) || [];
+        var pj;
+        for (pj = 0; pj < Math.min(6, crSrc.length); pj++) crPv.push(String(crSrc[pj]));
+      } catch (_) {}
+      // #region agent log
+      try {
+        agentDbgLog(
+          "import_to_photoshop.jsx:resolveFonts",
+          "throw_no_match",
+          { candidatePreview: crPv },
+          "H_strictResolve"
+        );
+      } catch (_) {}
+      // #endregion
+      throw new Error(
+        "settings 中的字体在 Photoshop 中未识别（候选: " +
+          crPv.join(" | ") +
+          "）。请在面板「刷新系统字体列表」并重新选择正文/加粗字体后保存。"
+      );
+    }
     if (!regular) regular = getDefaultLayerFont(textLayer);
     if (!regular) regular = getFirstAvailableFont();
     if (!bold) bold = regular;
@@ -1021,15 +1307,174 @@ On first launch, the file is initialized from the bundled settings.default.json
       fauxBoldFallbackActive: !hasRealBold && !!(cfg && cfg.useFauxBoldFallback)
     };
     try { $.global.WORD_IMPORT_LAST_FONT_RESOLVE = out; } catch (_) {}
+    // #region agent log
+    try {
+      var crRaw = cfg && cfg.fontRegularCandidates ? cfg.fontRegularCandidates : [];
+      var cbRaw = cfg && cfg.fontBoldCandidates ? cfg.fontBoldCandidates : [];
+      var cr = crRaw instanceof Array ? crRaw : (crRaw ? [crRaw] : []);
+      var cb = cbRaw instanceof Array ? cbRaw : (cbRaw ? [cbRaw] : []);
+      var prevR = [];
+      var prevB = [];
+      var pi;
+      for (pi = 0; pi < Math.min(6, cr.length); pi++) prevR.push(String(cr[pi]));
+      for (pi = 0; pi < Math.min(6, cb.length); pi++) prevB.push(String(cb[pi]));
+      agentDbgLog(
+        "import_to_photoshop.jsx:resolveFonts",
+        "resolved",
+        {
+          candRegularPreview: prevR,
+          candBoldPreview: prevB,
+          resolvedRegularPs: regular && regular.postScriptName ? String(regular.postScriptName) : "",
+          resolvedBoldPs: bold && bold.postScriptName ? String(bold.postScriptName) : "",
+          hasRealBold: hasRealBold
+        },
+        "H_resolve"
+      );
+    } catch (_) {}
+    // #endregion
     return out;
   }
 
+  function normalizeFontLabelCompare(s) {
+    return String(s || "")
+      .replace(/\u2013|\u2014|\uff0d/g, "-")
+      .replace(/\s+/g, " ")
+      .replace(/^\s+|\s+$/g, "")
+      .toLowerCase();
+  }
+
+  function candidateFontLabelVariants(token) {
+    var out = [];
+    var t = String(token || "").replace(/^\s+|\s+$/g, "");
+    if (!t) return out;
+    function pushUnique(s) {
+      var v = String(s || "").replace(/^\s+|\s+$/g, "");
+      if (!v) return;
+      var k = normalizeFontLabelCompare(v);
+      var x;
+      for (x = 0; x < out.length; x++) if (normalizeFontLabelCompare(out[x]) === k) return;
+      out.push(v);
+    }
+    pushUnique(t);
+    pushUnique(t.replace(/（[^）]*）/g, "").replace(/\([^)]*\)/g, "").replace(/^\s+|\s+$/g, ""));
+    return out;
+  }
+
+  /** settings.json 里可能存的是界面上的中文名 / postScriptName，与纯 PS 名不一致时仍能命中 installed font */
+  function findFontByCandidateLabel(token) {
+    var variants = candidateFontLabelVariants(token);
+    var vi;
+    var colls = [];
+    try {
+      if (app.textFonts && app.textFonts.length) colls.push(app.textFonts);
+    } catch (_) {}
+    try {
+      if (app.fonts && app.fonts.length) colls.push(app.fonts);
+    } catch (_) {}
+    for (vi = 0; vi < variants.length; vi++) {
+      var want = variants[vi];
+      var low = normalizeFontLabelCompare(want);
+      var ci;
+      for (ci = 0; ci < colls.length; ci++) {
+        var fonts = colls[ci];
+        try {
+          var i;
+          for (i = 0; i < fonts.length; i++) {
+            var ff = fonts[i];
+            var ps = String(ff.postScriptName || "");
+            var fam = String(ff.family || "");
+            var nm = "";
+            try {
+              nm = String(ff.name != null ? ff.name : "");
+            } catch (_) {}
+            if (ps === want || normalizeFontLabelCompare(ps) === low) return ff;
+            if (fam === want || normalizeFontLabelCompare(fam) === low) return ff;
+            if (nm === want || normalizeFontLabelCompare(nm) === low) return ff;
+          }
+          if (want.length >= 3) {
+            for (i = 0; i < fonts.length; i++) {
+              var ff2 = fonts[i];
+              var fam2 = String(ff2.family || "");
+              var nm2 = "";
+              try {
+                nm2 = String(ff2.name != null ? ff2.name : "");
+              } catch (_) {}
+              if (nm2.indexOf(want) >= 0 || fam2.indexOf(want) >= 0) return ff2;
+              var n2 = normalizeFontLabelCompare(nm2);
+              if (low.length >= 3 && n2.indexOf(low) >= 0) return ff2;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    return null;
+  }
+
+  /** 与 import_panel.matchTextFontByStem 一致：settings 里若误存了「文件名/界面名」而非 PS 名，仍可从 textFonts 命中。 */
+  function normalizeFontTokenStem(s) {
+    return String(s == null ? "" : s)
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "");
+  }
+  function findTextFontByPaletteOrNormStem(stem) {
+    var s = String(stem || "").replace(/^\s+|\s+$/g, "");
+    if (!s) return null;
+    var stemAsksHeiti = /heiti|黑体/i.test(s);
+    function acceptable(f) {
+      if (!f || !f.postScriptName) return false;
+      if (stemAsksHeiti) return true;
+      return !/^AdobeHeiti/i.test(String(f.postScriptName));
+    }
+    var normStem = normalizeFontTokenStem(s);
+    function scanPalette(coll) {
+      if (!coll || typeof coll.length !== "number") return null;
+      var i;
+      for (i = 0; i < coll.length; i++) {
+        try {
+          var f = coll[i];
+          var nm = "";
+          try {
+            nm = String(f.name != null ? f.name : "");
+          } catch (_) {}
+          if (nm === s && acceptable(f)) return f;
+        } catch (_) {}
+      }
+      for (i = 0; i < coll.length; i++) {
+        try {
+          var f2 = coll[i];
+          var nm2 = "";
+          try {
+            nm2 = String(f2.name != null ? f2.name : "");
+          } catch (_) {}
+          if (normStem && normalizeFontTokenStem(nm2) === normStem && acceptable(f2)) return f2;
+        } catch (_) {}
+      }
+      return null;
+    }
+    try {
+      var hit = scanPalette(app.textFonts);
+      if (hit) return hit;
+      return scanPalette(app.fonts);
+    } catch (_) {}
+    return null;
+  }
+
   function findFirstExistingPostScript(candidates) {
-    if (!candidates || !candidates.length) return null;
-    for (var i = 0; i < candidates.length; i++) {
-      var f = findFontByPostScript(candidates[i]);
+    var list = candidates;
+    if (list && !(list instanceof Array)) list = [list];
+    if (!list || !list.length) return null;
+    for (var i = 0; i < list.length; i++) {
+      var raw = list[i];
+      var token = typeof raw === "string" ? raw : (raw != null ? String(raw) : "");
+      token = token.replace(/^\s+|\s+$/g, "");
+      if (!token) continue;
+      var f = findFontByPostScript(token);
       if (f) return f;
-      f = getFontByNameLoose(candidates[i]);
+      f = getFontByNameLoose(token);
+      if (f) return f;
+      f = findFontByCandidateLabel(token);
+      if (f) return f;
+      f = findTextFontByPaletteOrNormStem(token);
       if (f) return f;
     }
     return null;
@@ -1038,8 +1483,10 @@ On first launch, the file is initialized from the bundled settings.default.json
   function findFirstMatchingFamily(families, styles) {
     if (!families || !styles) return null;
     for (var i = 0; i < families.length; i++) {
+      var fn = String(families[i] == null ? "" : families[i]).replace(/^\s+|\s+$/g, "");
+      if (!fn) continue;
       for (var j = 0; j < styles.length; j++) {
-        var f = findFontByFamilyAndStyle(families[i], styles[j]);
+        var f = findFontByFamilyAndStyle(fn, styles[j]);
         if (f) return f;
       }
     }
@@ -1049,7 +1496,11 @@ On first launch, the file is initialized from the bundled settings.default.json
   function findFirstFamily(families) {
     if (!families) return null;
     for (var i = 0; i < families.length; i++) {
-      var f = findFontByFamily(families[i]);
+      var fn = String(families[i] == null ? "" : families[i]).replace(/^\s+|\s+$/g, "");
+      if (!fn) continue;
+      var f = findFontByCandidateLabel(fn);
+      if (f) return f;
+      f = findFontByFamily(fn);
       if (f) return f;
     }
     return null;
@@ -1058,11 +1509,20 @@ On first launch, the file is initialized from the bundled settings.default.json
   function getFirstAvailableFont() {
     try {
       var fonts = app.textFonts;
-      if (!fonts) return null;
-      for (var i = 0; i < fonts.length; i++) {
-        if (fonts[i] && fonts[i].postScriptName) return fonts[i];
+      if (fonts && fonts.length) {
+        for (var i = 0; i < fonts.length; i++) {
+          if (fonts[i] && fonts[i].postScriptName) return fonts[i];
+        }
       }
     } catch (e) {}
+    try {
+      var fonts2 = app.fonts;
+      if (fonts2 && fonts2.length) {
+        for (var j = 0; j < fonts2.length; j++) {
+          if (fonts2[j] && fonts2[j].postScriptName) return fonts2[j];
+        }
+      }
+    } catch (e2) {}
     return null;
   }
 
@@ -1087,38 +1547,127 @@ On first launch, the file is initialized from the bundled settings.default.json
 
   function findFontByPostScript(psName) {
     try {
-      var fonts = app.textFonts;
-      for (var i = 0; i < fonts.length; i++) {
-        if (fonts[i].postScriptName === psName) return fonts[i];
+      var want = String(psName == null ? "" : psName).replace(/^\s+|\s+$/g, "");
+      if (!want) return null;
+      var wantLow = want.toLowerCase();
+      function scanFonts(fonts) {
+        if (!fonts || typeof fonts.length !== "number") return null;
+        var i;
+        for (i = 0; i < fonts.length; i++) {
+          try {
+            var ps = fonts[i].postScriptName;
+            if (ps === want) return fonts[i];
+          } catch (_) {}
+        }
+        for (i = 0; i < fonts.length; i++) {
+          try {
+            var ps2 = fonts[i].postScriptName;
+            if (ps2 != null && String(ps2).toLowerCase() === wantLow) return fonts[i];
+          } catch (_) {}
+        }
+        return null;
       }
+      var hit = scanFonts(app.textFonts);
+      if (hit) return hit;
+      return scanFonts(app.fonts);
     } catch (e) {}
     return null;
   }
 
-  function findFontByFamilyAndStyle(family, styleContains) {
+  function tryApplyDomTextFont(textLayer, postScriptName) {
+    if (!textLayer || !textLayer.textItem || !postScriptName) return false;
+    var ps = String(postScriptName).replace(/^\s+|\s+$/g, "");
+    if (!ps) return false;
+    var tf = findFontByPostScript(ps) || getFontByNameLoose(ps);
+    if (tf) {
+      try {
+        textLayer.textItem.font = tf;
+        return true;
+      } catch (_) {}
+      try {
+        if (tf.postScriptName) {
+          textLayer.textItem.font = String(tf.postScriptName);
+          return true;
+        }
+      } catch (_) {}
+    }
     try {
-      var fonts = app.textFonts;
-      for (var i = 0; i < fonts.length; i++) {
-        var f = fonts[i];
-        if (containsIgnoreCase(f.family || "", family) && containsIgnoreCase(f.style || "", styleContains)) return f;
+      textLayer.textItem.font = ps;
+      return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function findFontByFamilyAndStyle(family, styleContains) {
+    var famNeedle = String(family || "").replace(/^\s+|\s+$/g, "");
+    var styNeedle = String(styleContains || "").replace(/^\s+|\s+$/g, "");
+    if (!famNeedle || !styNeedle) return null;
+    function scan(coll) {
+      if (!coll || typeof coll.length !== "number") return null;
+      var i;
+      for (i = 0; i < coll.length; i++) {
+        try {
+          var f = coll[i];
+          if (!containsIgnoreCase(f.style || "", styNeedle)) continue;
+          var nm = "";
+          try {
+            nm = String(f.name != null ? f.name : "");
+          } catch (_) {}
+          var ps = String(f.postScriptName || "");
+          var matchFam =
+            containsIgnoreCase(f.family || "", famNeedle) ||
+            containsIgnoreCase(nm, famNeedle) ||
+            containsIgnoreCase(ps, famNeedle);
+          if (matchFam) return f;
+        } catch (_) {}
       }
+      return null;
+    }
+    try {
+      var r = scan(app.textFonts);
+      if (r) return r;
+      return scan(app.fonts);
     } catch (e) {}
     return null;
   }
 
   function findFontByFamily(family) {
-    try {
-      var fonts = app.textFonts;
-      for (var i = 0; i < fonts.length; i++) {
-        var f = fonts[i];
-        if (containsIgnoreCase(f.family || "", family)) return f;
+    var famNeedle = String(family || "").replace(/^\s+|\s+$/g, "");
+    if (!famNeedle) return null;
+    function scan(coll) {
+      if (!coll || typeof coll.length !== "number") return null;
+      var i;
+      for (i = 0; i < coll.length; i++) {
+        try {
+          var f = coll[i];
+          var nm = "";
+          try {
+            nm = String(f.name != null ? f.name : "");
+          } catch (_) {}
+          var ps = String(f.postScriptName || "");
+          if (
+            containsIgnoreCase(f.family || "", famNeedle) ||
+            containsIgnoreCase(nm, famNeedle) ||
+            containsIgnoreCase(ps, famNeedle)
+          ) {
+            return f;
+          }
+        } catch (_) {}
       }
+      return null;
+    }
+    try {
+      var r = scan(app.textFonts);
+      if (r) return r;
+      return scan(app.fonts);
     } catch (e) {}
     return null;
   }
 
   function containsIgnoreCase(a, b) {
-    return String(a).toLowerCase().indexOf(String(b).toLowerCase()) >= 0;
+    var needle = String(b || "").replace(/^\s+|\s+$/g, "");
+    if (!needle) return false;
+    return String(a).toLowerCase().indexOf(needle.toLowerCase()) >= 0;
   }
 
   function getUnitPx(v) {
@@ -1591,15 +2140,20 @@ On first launch, the file is initialized from the bundled settings.default.json
   }
 
   function makeStyleRange(from, to, isBold, isItalic, font, cfg) {
-    var useBoldFont = !!(isBold && font.bold && font.regular && font.bold.postScriptName !== font.regular.postScriptName);
+    var separateBoldFace = !!(font.bold && font.regular && font.bold.postScriptName !== font.regular.postScriptName);
+    var useBoldFont = !!(isBold && separateBoldFace);
+    // settings「无（仿加粗）」会存 fontHasRealBold:false；若仍用 resolveFonts 解析出的独立粗体面，会抑制 fauxBold。
+    if (cfg && cfg.fontHasRealBold === false) {
+      useBoldFont = false;
+    }
     return {
       from: from,
       to: to,
       style: {
         fontPostScriptName: useBoldFont ? font.bold.postScriptName : font.regular.postScriptName,
-        fauxBold: !!(!useBoldFont && isBold && cfg.useFauxBoldFallback),
-        fauxItalic: !!(isItalic && cfg.useFauxItalic),
-        syntheticItalic: !!(isItalic && cfg.useFauxItalic)
+        fauxBold: !!(!useBoldFont && isBold && cfg && cfg.useFauxBoldFallback),
+        fauxItalic: !!(isItalic && cfg && cfg.useFauxItalic),
+        syntheticItalic: !!(isItalic && cfg && cfg.useFauxItalic)
       }
     };
   }
@@ -1705,8 +2259,26 @@ On first launch, the file is initialized from the bundled settings.default.json
       setRef.putIdentifier(charIDToTypeID("Lyr "), textLayer.id);
       setDesc.putReference(charIDToTypeID("null"), setRef);
       setDesc.putObject(charIDToTypeID("T   "), stringIDToTypeID("textLayer"), textDesc);
+      var fontBeforeAm = "";
+      try {
+        fontBeforeAm = String(textLayer.textItem.font);
+      } catch (_) {}
       try {
         executeAction(charIDToTypeID("setd"), setDesc, DialogModes.NO);
+        // #region agent log
+        var fontAfterAm = "";
+        try {
+          fontAfterAm = String(textLayer.textItem.font);
+        } catch (_) {}
+        if (fontBeforeAm && fontAfterAm && fontBeforeAm !== fontAfterAm) {
+          agentDbgLog(
+            "import_to_photoshop.jsx:forceParagraphLeadingByAM",
+            "font changed by paragraphStyle AM setd",
+            { before: fontBeforeAm, after: fontAfterAm },
+            "H_wipe"
+          );
+        }
+        // #endregion
       } catch (_) {
         // Older PS builds may reject paragraphStyleRange; applyParagraphTypography already set leading/justify via DOM.
       }
@@ -1729,29 +2301,101 @@ On first launch, the file is initialized from the bundled settings.default.json
     try {
       textLayer.textItem.mojikumi = Mojikumi.NONE;
     } catch (_) {}
-    // Re-apply paragraph style via ActionManager so mixed-style ranges won't reset alignment.
-    forceParagraphLeadingByAM(textLayer, cfg, opts);
+    // 字距：默认「手动 / 0」，避免沿用文档字符面板里的「度量标准」式自动字偶。
+    try {
+      if (typeof AutoKernType !== "undefined" && AutoKernType.MANUAL) {
+        textLayer.textItem.autoKerning = AutoKernType.MANUAL;
+      } else if (typeof AutoKern !== "undefined" && AutoKern.MANUAL) {
+        textLayer.textItem.autoKerning = AutoKern.MANUAL;
+      }
+    } catch (_) {}
+    try {
+      textLayer.textItem.tracking = 0;
+    } catch (_) {}
+    // ActionManager setd（paragraphStyleRange）会冲掉刚设好的字符样式字体，图层回到文档默认（常为微软雅黑）。
+    // 默认关掉；若需在极端混排场景强制用 AM 对齐，可在 settings.json 设 useParagraphLeadingActionManager: true。
+    var skipParaAm = !!(opts && opts.skipParagraphLeadingActionManager);
+    var wantParaAm = !!(cfg && cfg.useParagraphLeadingActionManager === true);
+    if (wantParaAm && !skipParaAm) {
+      forceParagraphLeadingByAM(textLayer, cfg, opts);
+    }
     applyTextColorFromCfg(textLayer, cfg);
   }
 
-  function applyTextWithStyleRanges(textLayer, fullText, styleRanges, cfg) {
-    textLayer.textItem.contents = fullText;
-    textLayer.textItem.size = cfg.fontSizePt;
+  /**
+   * 部分 PS/字体组合下，AM textStyleRange 已写入 fauxBold，但字符面板仍显示未仿粗；对「整段单一 textStyle」再写 DOM。
+   * 混排多段样式仍以 AM 为准，不在此强行改整层 faux（避免误伤非粗部分）。
+   */
+  function syncTextLayerDomFauxFromRanges(textLayer, styleRanges) {
+    if (!textLayer || !textLayer.textItem || !styleRanges || !styleRanges.length) return;
+    if (styleRanges.length !== 1) return;
+    var st = styleRanges[0].style || {};
+    try {
+      if (typeof st.fauxBold !== "undefined") textLayer.textItem.fauxBold = !!st.fauxBold;
+    } catch (_) {}
+    try {
+      if (typeof st.fauxItalic !== "undefined") textLayer.textItem.fauxItalic = !!st.fauxItalic;
+    } catch (_) {}
+  }
+
+  function applyTextWithStyleRanges(textLayer, fullText, styleRanges, cfg, paraHints) {
+    try {
+      textLayer.textItem.size = cfg.fontSizePt != null ? cfg.fontSizePt : 26;
+    } catch (_) {}
 
     // Fast path: single style for the whole paragraph -> avoid ActionDescriptor work.
     try {
       if (styleRanges && styleRanges.length === 1 && styleRanges[0].from === 0 && styleRanges[0].to === fullText.length) {
         var s = styleRanges[0].style || {};
-        try { if (s.fontPostScriptName) textLayer.textItem.font = s.fontPostScriptName; } catch (_) {}
-        try { if (typeof s.fauxBold !== "undefined") textLayer.textItem.fauxBold = !!s.fauxBold; } catch (_) {}
-        try { if (typeof s.fauxItalic !== "undefined") textLayer.textItem.fauxItalic = !!s.fauxItalic; } catch (_) {}
+        var psDom = s.fontPostScriptName ? String(s.fontPostScriptName) : "";
+        if (psDom) tryApplyDomTextFont(textLayer, psDom);
+        try {
+          textLayer.textItem.contents = fullText;
+        } catch (_) {}
+        if (psDom) tryApplyDomTextFont(textLayer, psDom);
+        try {
+          if (typeof s.fauxBold !== "undefined") textLayer.textItem.fauxBold = !!s.fauxBold;
+        } catch (_) {}
+        try {
+          if (typeof s.fauxItalic !== "undefined") textLayer.textItem.fauxItalic = !!s.fauxItalic;
+        } catch (_) {}
         try {
           textLayer.textItem.autoLeading = false;
           textLayer.textItem.leading = UnitValue(getLineSpacingPt(cfg), "pt");
         } catch (_) {}
-        return;
+        if (psDom) tryApplyDomTextFont(textLayer, psDom);
+        try {
+          if (typeof s.fauxBold !== "undefined") textLayer.textItem.fauxBold = !!s.fauxBold;
+          if (typeof s.fauxItalic !== "undefined") textLayer.textItem.fauxItalic = !!s.fauxItalic;
+        } catch (_) {}
+        // #region agent log
+        try {
+          var fbAfterDom = null;
+          try {
+            fbAfterDom = !!textLayer.textItem.fauxBold;
+          } catch (_) {
+            fbAfterDom = -1;
+          }
+          agentDbgLog(
+            "import_to_photoshop.jsx:applyTextWithStyleRanges:fastPath_afterThirdTryApplyFont",
+            "fauxBold after DOM sequence before AM",
+            { psDom: String(psDom).slice(0, 80), styleFauxBold: !!s.fauxBold, textItemFauxBold: fbAfterDom },
+            "H_dom_font_resets_faux"
+          );
+        } catch (_) {}
+        // #endregion
+        // 不 return：单段整段若仅走上方 DOM，在「复制自模板」文本层上可能仍落回缺字黑体；继续执行 AM setd。
       }
-    } catch (_) {}
+    } catch (eFast) {
+      // #region agent log
+      agentDbgLog(
+        "import_to_photoshop.jsx:applyTextWithStyleRanges",
+        "fast path exception",
+        { msg: String(eFast && eFast.message ? eFast.message : eFast) },
+        "H_dom_apply"
+      );
+      // #endregion
+    }
 
     var layerRef = new ActionReference();
     layerRef.putIdentifier(charIDToTypeID("Lyr "), textLayer.id);
@@ -1778,12 +2422,221 @@ On first launch, the file is initialized from the bundled settings.default.json
     }
     textDesc.putList(stringIDToTypeID("textStyleRange"), list);
 
+    tryPutParagraphStyleRangeAsianTypographyExperiment(textDesc, fullText, cfg, paraHints);
+
     var desc = new ActionDescriptor();
     var ref = new ActionReference();
     ref.putIdentifier(charIDToTypeID("Lyr "), textLayer.id);
     desc.putReference(charIDToTypeID("null"), ref);
     desc.putObject(charIDToTypeID("T   "), stringIDToTypeID("textLayer"), textDesc);
-    executeAction(charIDToTypeID("setd"), desc, DialogModes.NO);
+    var amOk = false;
+    try {
+      executeAction(charIDToTypeID("setd"), desc, DialogModes.NO);
+      amOk = true;
+      try {
+        syncTextLayerDomFauxFromRanges(textLayer, styleRanges);
+      } catch (_) {}
+    } catch (eAm) {
+      // #region agent log
+      agentDbgLog(
+        "import_to_photoshop.jsx:applyTextWithStyleRanges",
+        "AM setd failed",
+        { msg: String(eAm && eAm.message ? eAm.message : eAm) },
+        "H_am_fail"
+      );
+      // #endregion
+    }
+    // #region agent log
+    try {
+      var fbPostAm = null;
+      try {
+        fbPostAm = !!textLayer.textItem.fauxBold;
+      } catch (_) {
+        fbPostAm = -1;
+      }
+      var wantFb0 = !!(styleRanges && styleRanges[0] && styleRanges[0].style && styleRanges[0].style.fauxBold);
+      var anyFb = false;
+      var fauxPreview = [];
+      var riFb;
+      for (riFb = 0; riFb < Math.min(8, styleRanges ? styleRanges.length : 0); riFb++) {
+        var rfb = styleRanges[riFb] || {};
+        var sfb = rfb.style || {};
+        var fb = !!sfb.fauxBold;
+        if (fb) anyFb = true;
+        fauxPreview.push({
+          rfFrom: rfb.from,
+          rfTo: rfb.to,
+          fauxBold: fb,
+          fauxItalic: !!sfb.fauxItalic
+        });
+      }
+      agentDbgLog(
+        "import_to_photoshop.jsx:applyTextWithStyleRanges:postExecuteAction",
+        "AM outcome vs DOM fauxBold (range0 alone is misleading when first span is non-bold)",
+        {
+          amOk: !!amOk,
+          wantFauxFromRange0: wantFb0,
+          anyRangeFauxBold: anyFb,
+          rangeCount: styleRanges ? styleRanges.length : 0,
+          rangesFauxPreview: fauxPreview,
+          textItemFauxBold: fbPostAm
+        },
+        "H_am_vs_dom_faux"
+      );
+    } catch (_) {}
+    // #endregion
+    if (!amOk && styleRanges && styleRanges[0] && styleRanges[0].style) {
+      // #region agent log
+      try {
+        agentDbgLog(
+          "import_to_photoshop.jsx:applyTextWithStyleRanges:fallbackBranch",
+          "AM failed; fallback path omits fauxBold reapply",
+          {
+            wantFaux: !!styleRanges[0].style.fauxBold,
+            psFb: String(styleRanges[0].style.fontPostScriptName || "").slice(0, 80)
+          },
+          "H_fallback_strips_faux"
+        );
+      } catch (_) {}
+      // #endregion
+      var psFb = styleRanges[0].style.fontPostScriptName ? String(styleRanges[0].style.fontPostScriptName) : "";
+      try {
+        textLayer.textItem.contents = fullText;
+      } catch (_) {}
+      if (psFb) tryApplyDomTextFont(textLayer, psFb);
+      try {
+        textLayer.textItem.autoLeading = false;
+        textLayer.textItem.leading = UnitValue(getLineSpacingPt(cfg), "pt");
+      } catch (_) {}
+      try {
+        syncTextLayerDomFauxFromRanges(textLayer, styleRanges);
+      } catch (_) {}
+    }
+  }
+
+  /** AM 小实验：字符样式 tracking / 自动字偶 → 手动（各 PS 版本键名不一致，逐个 try）。 */
+  function tryPutCharStyleTrackingKerningExperiments(desc) {
+    if (!desc) return;
+    var kernTriples = [
+      ["autoKern", "autoKern", "manualKern"],
+      ["autoKern", "autoKern", "manual"],
+      ["autoKern", "autoKern", "MANUAL"],
+      ["kernType", "kernType", "manualKern"],
+      ["kernType", "kernType", "manual"]
+    ];
+    var ki;
+    for (ki = 0; ki < kernTriples.length; ki++) {
+      try {
+        desc.putEnumerated(
+          stringIDToTypeID(kernTriples[ki][0]),
+          stringIDToTypeID(kernTriples[ki][1]),
+          stringIDToTypeID(kernTriples[ki][2])
+        );
+        break;
+      } catch (_) {}
+    }
+    try {
+      desc.putInteger(stringIDToTypeID("tracking"), 0);
+    } catch (_) {}
+    try {
+      desc.putUnitDouble(stringIDToTypeID("tracking"), charIDToTypeID("#Pnt"), 0);
+    } catch (_) {}
+    try {
+      desc.putUnitDouble(charIDToTypeID("Trck"), charIDToTypeID("#Pnt"), 0);
+    } catch (_) {}
+    try {
+      desc.putDouble(stringIDToTypeID("tracking"), 0);
+    } catch (_) {}
+  }
+
+  /** AM 小实验：段落 mojikumi → NONE（简体「间距组合 2」≈ UXP Mojikumi.SET2）。枚举类型名需试 Mojikumi / mojikumi。 */
+  function tryPutAsianTypographyMojikumiExperimentsOnParagraphStyle(paraStyle) {
+    if (!paraStyle) return;
+    var mjTriples = [
+      ["mojikumi", "Mojikumi", "NONE"],
+      ["mojikumi", "mojikumi", "NONE"],
+      ["mojikumi", "Mojikumi", "none"],
+      ["mojikumi", "mojikumi", "none"],
+      ["defaultMojikumi", "Mojikumi", "NONE"],
+      ["defaultMojikumi", "mojikumi", "NONE"],
+      ["mojikumi", "mojikumi", "mojikumiNone"],
+      ["mojikumi", "ordinal", "none"],
+      ["mojikumi", "mojikumi", "MOJIKUMI_NONE"],
+      ["defaultMojikumi", "defaultMojikumi", "none"],
+      ["defaultMojikumi", "defaultMojikumi", "mojikumiNone"]
+    ];
+    var mi;
+    for (mi = 0; mi < mjTriples.length; mi++) {
+      try {
+        paraStyle.putEnumerated(
+          stringIDToTypeID(mjTriples[mi][0]),
+          stringIDToTypeID(mjTriples[mi][1]),
+          stringIDToTypeID(mjTriples[mi][2])
+        );
+        return;
+      } catch (_) {}
+    }
+    try {
+      paraStyle.putInteger(stringIDToTypeID("mojikumi"), 0);
+    } catch (_) {}
+  }
+
+  /** textKey 根级部分版本单独存默认 mojikumi，与 paragraphStyleRange 并存试写。 */
+  function tryPutTextKeyRootMojikumiExperiments(textDesc) {
+    if (!textDesc) return;
+    var rootTriples = [
+      ["mojikumi", "Mojikumi", "NONE"],
+      ["mojikumi", "mojikumi", "NONE"],
+      ["defaultMojikumi", "Mojikumi", "NONE"],
+      ["defaultMojikumi", "mojikumi", "NONE"]
+    ];
+    var ri;
+    for (ri = 0; ri < rootTriples.length; ri++) {
+      try {
+        textDesc.putEnumerated(
+          stringIDToTypeID(rootTriples[ri][0]),
+          stringIDToTypeID(rootTriples[ri][1]),
+          stringIDToTypeID(rootTriples[ri][2])
+        );
+        return;
+      } catch (_) {}
+    }
+  }
+
+  /**
+   * 在 textKey 上写入整段 paragraphStyleRange（含行距/对齐 + mojikumi 实验）。
+   * setd 若不携带段落范围，PS 可能沿用文档默认「间距组合 2」等东亚排版。
+   */
+  function tryPutParagraphStyleRangeAsianTypographyExperiment(textDesc, fullText, cfg, paraHints) {
+    if (!textDesc || fullText == null) return;
+    var textLen = String(fullText).length;
+    if (textLen < 1) textLen = 1;
+    paraHints = paraHints || {};
+    try {
+      var paraStyle = new ActionDescriptor();
+      var leadPt = getLineSpacingPt(cfg);
+      paraStyle.putBoolean(stringIDToTypeID("autoLeading"), false);
+      paraStyle.putUnitDouble(stringIDToTypeID("leading"), charIDToTypeID("#Pnt"), leadPt);
+      try {
+        var alignKey0 = paraHints.alignKey ? normalizeTextAlignKey(paraHints.alignKey) : "left";
+        if (paraHints.centered) alignKey0 = "center";
+        var alignEnum = stringIDToTypeID("left");
+        if (alignKey0 === "right") alignEnum = stringIDToTypeID("right");
+        else if (alignKey0 === "center") alignEnum = stringIDToTypeID("center");
+        paraStyle.putEnumerated(stringIDToTypeID("align"), stringIDToTypeID("alignmentType"), alignEnum);
+      } catch (_) {}
+      tryPutAsianTypographyMojikumiExperimentsOnParagraphStyle(paraStyle);
+
+      var paraRange = new ActionDescriptor();
+      paraRange.putInteger(stringIDToTypeID("from"), 0);
+      paraRange.putInteger(stringIDToTypeID("to"), textLen);
+      paraRange.putObject(stringIDToTypeID("paragraphStyle"), stringIDToTypeID("paragraphStyle"), paraStyle);
+
+      var paraList = new ActionList();
+      paraList.putObject(stringIDToTypeID("paragraphStyleRange"), paraRange);
+      textDesc.putList(stringIDToTypeID("paragraphStyleRange"), paraList);
+      tryPutTextKeyRootMojikumiExperiments(textDesc);
+    } catch (_) {}
   }
 
   function fillStyleDescriptor(desc, style, cfg) {
@@ -1798,6 +2651,7 @@ On first launch, the file is initialized from the bundled settings.default.json
     desc.putUnitDouble(stringIDToTypeID("impliedFontSize"), charIDToTypeID("#Pnt"), fontSizePt);
     desc.putBoolean(stringIDToTypeID("autoLeading"), false);
     desc.putUnitDouble(stringIDToTypeID("leading"), charIDToTypeID("#Pnt"), leadPt);
+    tryPutCharStyleTrackingKerningExperiments(desc);
   }
 
   /**
@@ -2064,8 +2918,76 @@ On first launch, the file is initialized from the bundled settings.default.json
         layer.remove();
         throw new Error("段落无法生成文本内容");
       }
-      applyTextWithStyleRanges(layer, model.fullText, model.styleRanges, cfg);
+      // #region agent log
+      try {
+        var segPv = [];
+        var psi;
+        for (psi = 0; psi < Math.min(4, para.segments.length); psi++) {
+          var se0 = para.segments[psi] || {};
+          segPv.push({ bold: !!se0.bold, italic: !!se0.italic, len: String(se0.text != null ? se0.text : "").length });
+        }
+        var rf = [];
+        var ri0;
+        for (ri0 = 0; ri0 < Math.min(6, model.styleRanges.length); ri0++) {
+          var rr = model.styleRanges[ri0] || {};
+          var st = rr.style || {};
+          rf.push({
+            rfFrom: rr.from,
+            rfTo: rr.to,
+            fauxBold: !!st.fauxBold,
+            ps: String(st.fontPostScriptName || "").slice(0, 48)
+          });
+        }
+        agentDbgLog(
+          "import_to_photoshop.jsx:insertBubbleParagraphCEP:beforeApply",
+          "cfg + font + ranges before applyTextWithStyleRanges",
+          {
+            useFauxBoldFallback: !!(cfg && cfg.useFauxBoldFallback),
+            fontHasRealBoldCfg: cfg && typeof cfg.fontHasRealBold !== "undefined" ? !!cfg.fontHasRealBold : null,
+            hasRealBold: !!(font && font.hasRealBold),
+            regPs: String(font && font.regular && font.regular.postScriptName ? font.regular.postScriptName : "").slice(0, 48),
+            boldPs: String(font && font.bold && font.bold.postScriptName ? font.bold.postScriptName : "").slice(0, 48),
+            segmentsPreview: segPv,
+            rangesPreview: rf
+          },
+          "H_cfg_segments_ranges"
+        );
+      } catch (_) {}
+      // #endregion
+      applyTextWithStyleRanges(layer, model.fullText, model.styleRanges, cfg, typoOpts);
       applyParagraphTypography(layer, cfg, typoOpts);
+      var rangesBub = model.styleRanges || [];
+      var uniqPsBub = {};
+      var rbi;
+      for (rbi = 0; rbi < rangesBub.length; rbi++) {
+        var psB = rangesBub[rbi].style && rangesBub[rbi].style.fontPostScriptName ? String(rangesBub[rbi].style.fontPostScriptName) : "";
+        if (psB) uniqPsBub[psB] = true;
+      }
+      var ksBub = [];
+      for (var kb in uniqPsBub) if (uniqPsBub.hasOwnProperty(kb)) ksBub.push(kb);
+      // 与 importOnePage 一致：applyParagraphTypography 会冲掉 AM 字符样式；单字体整段也必须二次 applyTextWithStyleRanges（含仿粗/字体 PS 名）。
+      if (ksBub.length >= 1) {
+        applyTextWithStyleRanges(layer, model.fullText, model.styleRanges, cfg, typoOpts);
+      }
+      try {
+        applyParagraphTypography(layer, cfg, typoOpts);
+      } catch (_) {}
+      // #region agent log
+      try {
+        var fbFinal = null;
+        try {
+          fbFinal = !!layer.textItem.fauxBold;
+        } catch (_) {
+          fbFinal = -1;
+        }
+        agentDbgLog(
+          "import_to_photoshop.jsx:insertBubbleParagraphCEP:afterSecondApply",
+          "layer.textItem.fauxBold after typography + reapply",
+          { textItemFauxBold: fbFinal },
+          "H_final_layer_faux"
+        );
+      } catch (_) {}
+      // #endregion
 
       out.layerName = layer.name;
       out.x = x;

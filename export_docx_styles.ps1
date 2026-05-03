@@ -90,13 +90,14 @@ function Get-WordDocumentXml([string]$docxFullPath) {
 
 function New-XmlDocumentFromWordMarkup([string]$xmlText) {
   # Word 有时写入 XML 1.0 非法字符（尤其含图/复制粘贴），LoadXml 会整段失败；用 Reader 放宽校验。
-  $settings = New-Object System.Xml.XmlReaderSettings
-  $settings.CheckCharacters = $false
-  $settings.IgnoreComments = $true
-  $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+  # 使用 $readerSettings：部分宿主在 Set-StrictMode 下对 $settings 名称异常敏感。
+  $readerSettings = New-Object System.Xml.XmlReaderSettings
+  $readerSettings.CheckCharacters = $false
+  $readerSettings.IgnoreComments = $true
+  $readerSettings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
   $stringReader = New-Object System.IO.StringReader($xmlText)
   try {
-    $reader = [System.Xml.XmlReader]::Create($stringReader, $settings)
+    $reader = [System.Xml.XmlReader]::Create($stringReader, $readerSettings)
     try {
       $xmlDoc = New-Object System.Xml.XmlDocument
       $xmlDoc.PreserveWhitespace = $true
@@ -335,9 +336,7 @@ function ConvertTo-PhotoshopDataFile([object]$payload, [switch]$Minify) {
   } else {
     $payload | ConvertTo-Json -Depth 50
   }
-  return @"
-var WORD_IMPORT_DATA = $json;
-"@
+  return 'var WORD_IMPORT_DATA = ' + $json + ';'
 }
 
 function Copy-DocPathToTempDocxPath([string]$sourcePath) {
@@ -359,36 +358,48 @@ $payloadSourcePath = Resolve-FullPath $DocxPath
 $tempRenamedDocx = $null
 $docxFull = $payloadSourcePath
 try {
-  if ([System.IO.Path]::GetExtension($payloadSourcePath) -ieq ".doc") {
-    $docxFull = Copy-DocPathToTempDocxPath -sourcePath $payloadSourcePath
-    $tempRenamedDocx = $docxFull
-  }
-
-  if ([string]::IsNullOrWhiteSpace($OutFile)) {
-    $OutFile = Select-OutputFilePath -docxFullPath $payloadSourcePath
-  }
-
-  $outFull = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path (Get-Location) $OutFile }
-
-  $xml = Get-WordDocumentXml -docxFullPath $docxFull
-  $paragraphs = Parse-Paragraphs -xmlText $xml
-  $grouped = Group-ParagraphsByPage -paragraphs $paragraphs
-  $payload = Build-ExportPayload -docxFullPath $payloadSourcePath -groupedPages $grouped
-
-  $outDir = Split-Path -Parent $outFull
-  if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
-    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-  }
-
-  [System.IO.File]::WriteAllText($outFull, (ConvertTo-PhotoshopDataFile -payload $payload -Minify:$Minify), [System.Text.Encoding]::UTF8)
-
-  Write-Host "Wrote Photoshop data: $outFull"
-  Write-Host ("Pages found: " + $payload.pages.Count)
-  if ($payload.warnings.Count -gt 0) {
-    Write-Host "Warnings:"
-    foreach ($warning in $payload.warnings) {
-      Write-Host ("- " + $warning)
+  try {
+    if ([System.IO.Path]::GetExtension($payloadSourcePath) -ieq ".doc") {
+      $docxFull = Copy-DocPathToTempDocxPath -sourcePath $payloadSourcePath
+      $tempRenamedDocx = $docxFull
     }
+
+    if ([string]::IsNullOrWhiteSpace($OutFile)) {
+      $OutFile = Select-OutputFilePath -docxFullPath $payloadSourcePath
+    }
+
+    $outFull = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path (Get-Location) $OutFile }
+
+    $xml = Get-WordDocumentXml -docxFullPath $docxFull
+    $paragraphs = Parse-Paragraphs -xmlText $xml
+    $grouped = Group-ParagraphsByPage -paragraphs $paragraphs
+    $payload = Build-ExportPayload -docxFullPath $payloadSourcePath -groupedPages $grouped
+
+    $outDir = Split-Path -Parent $outFull
+    if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
+      New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+    }
+
+    [System.IO.File]::WriteAllText($outFull, (ConvertTo-PhotoshopDataFile -payload $payload -Minify:$Minify), [System.Text.Encoding]::UTF8)
+
+    Write-Host "Wrote Photoshop data: $outFull"
+    Write-Host ("Pages found: " + $payload.pages.Count)
+    if ($payload.warnings.Count -gt 0) {
+      Write-Host "Warnings:"
+      foreach ($warning in $payload.warnings) {
+        Write-Host ("- " + $warning)
+      }
+    }
+  } catch {
+    $m = $_.Exception.Message
+    $code = 'E_UNKNOWN'
+    if ($m -match '(?i)cancel') { $code = 'E_USER_CANCEL' }
+    elseif ($m -match '(?i)document\.xml|Missing') { $code = 'E_DOCX_STRUCTURE' }
+    elseif ($m -match '(?i)not found|file not found|cannot find|missing path') { $code = 'E_IO' }
+    elseif ($m -match '(?i)zip|InvalidData|corrupt') { $code = 'E_DOCX_ZIP' }
+    elseif ($m -match '(?i)access|denied|Unauthorized') { $code = 'E_IO_ACCESS' }
+    Write-Host ("[" + $code + "] " + $m)
+    throw
   }
 }
 finally {

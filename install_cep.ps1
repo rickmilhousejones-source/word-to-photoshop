@@ -64,7 +64,8 @@ try {
   $repoFiles = @(
     @{ Src = "import_to_photoshop.jsx";       Dst = "import_to_photoshop.jsx" },
     @{ Src = "import_panel.jsx";              Dst = "import_panel.jsx" },
-    @{ Src = "export_docx_styles.ps1";        Dst = "export_docx_styles.ps1" },
+    # 与 CEP 内 host/repo 副本同源，避免仅改 cep 未改根目录时安装仍拷旧文件导致 $readerSettings 等半截脚本
+    @{ Src = "cep-extension\com.word_to_photoshop.panel\host\repo\export_docx_styles.ps1"; Dst = "export_docx_styles.ps1" },
     @{ Src = "start_cursor_daemon.ps1";       Dst = "start_cursor_daemon.ps1" },
     @{ Src = "cursor_probe.ps1";              Dst = "cursor_probe.ps1" },
     @{ Src = "cursor_daemon.ps1";             Dst = "cursor_daemon.ps1" }
@@ -96,7 +97,12 @@ try {
       foreach ($entry in $repoFiles) {
         $src = Join-Path $scriptDir $entry.Src
         $dst = Join-Path $repoDest $entry.Dst
-        [void](Copy-Payload $src $dst)
+        if (-not (Test-Path -LiteralPath $src)) {
+          throw "Missing install source (run install from repo root): $src"
+        }
+        if (-not (Copy-Payload $src $dst)) {
+          throw "Failed to copy payload to $dst from $src"
+        }
       }
       foreach ($entry in $repoDirs) {
         $src = Join-Path $scriptDir $entry.Src

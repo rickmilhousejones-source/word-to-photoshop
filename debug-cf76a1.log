@@ -1,3 +1,0 @@
-﻿{"data":{"dp0":"C:\\Users\\whhai\\Documents\\GitHub\\word-to-photoshop\\"},"hypothesisId":"H0","message":"batch_start","sessionId":"cf76a1","timestamp":1777726151876,"location":"installer.cmd:boot"}
-{"data":{"cd":"C:\\Users\\whhai\\Documents\\GitHub\\word-to-photoshop"},"hypothesisId":"H0","message":"cd_ok","sessionId":"cf76a1","timestamp":1777726152422,"location":"installer.cmd:after_cd"}
-{"data":{"errorlevel":"1"},"hypothesisId":"H1","message":"choice_done","sessionId":"cf76a1","timestamp":1777726153023,"location":"installer.cmd:after_choice"}

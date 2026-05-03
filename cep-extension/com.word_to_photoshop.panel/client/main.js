@@ -29,8 +29,14 @@
   var lastProbeCursorX = NaN;
   var lastProbeCursorY = NaN;
   var lastTickEarlyLogTs = 0;
+  var lastProbeReadFailLogTs = 0;
   var requireMouseUpBeforeTrigger = false;
   var suppressTriggerUntilTs = 0;
+  /** 限制日志体积，减轻长时间轮询下 PS 2026 CEP 面板压力 */
+  var LOG_MAX_LINES = 200;
+  var LOG_MAX_CHARS = 96000;
+  /** 画布点击轮询间隔（毫秒）；由 30 调至 48 略降频率，减轻 CEP 压力 */
+  var PLACEMENT_POLL_MS = 48;
 
   var CE_TEXT_ALIGN_KEY = "word_import_cep_text_align";
 
@@ -79,8 +85,38 @@
     var now = new Date();
     var ts = now.toTimeString().slice(0, 8);
     var line = "[" + ts + "] " + msg;
-    logBox.value = logBox.value ? (logBox.value + "\n" + line) : line;
+    var next = logBox.value ? (logBox.value + "\n" + line) : line;
+    if (next.length > LOG_MAX_CHARS) {
+      var parts = next.split("\n");
+      if (parts.length > LOG_MAX_LINES) {
+        parts = parts.slice(parts.length - LOG_MAX_LINES);
+        next = "…(已截断较早日志)\n" + parts.join("\n");
+      } else {
+        next = next.slice(next.length - LOG_MAX_CHARS);
+        next = "…(已截断)\n" + next;
+      }
+    }
+    logBox.value = next;
     logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  /** 宿主返回的屏幕坐标映射诊断码（仅非 ok 时有意义） */
+  function describeScreenToDocFail(code) {
+    var c = String(code || "").replace(/^\s+|\s+$/g, "");
+    if (!c || /^ok_/i.test(c)) return "";
+    var map = {
+      no_doc_or_probe: "无活动文档或探针未就绪",
+      no_cursor: "无法读取 PS 光标/取样器",
+      fallback_client_ratio_no_am_view: "无 AM 视口信息，已用客户端比例回退",
+      no_am_view: "缺少 AM 视口数据",
+      bad_am_zoom: "AM 缩放数据异常",
+      bad_am_center: "AM 视口中心异常",
+      bad_viewport: "视口换算异常",
+      bad_doc_xy: "文档坐标换算结果异常",
+      fallback_payload_ratio: "已用探针比例回退映射点击",
+      exception: "屏幕到文档坐标映射异常"
+    };
+    return map[c] || c;
   }
 
   function isCepHost() {
@@ -225,6 +261,25 @@
     var script = 'WORD_IMPORT_CEP.exportDocxToJsxdata("","","' + escHostString(repoRootHint) + '")';
     callHost(script, function (result) {
       if (!result || result.indexOf("OK|") !== 0) {
+        // #region agent log
+        try {
+          fetch("http://127.0.0.1:7706/ingest/e060ea63-a144-43df-ae0b-adf401789755", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "34d76a"
+            },
+            body: JSON.stringify({
+              sessionId: "34d76a",
+              hypothesisId: "H_export_client",
+              location: "main.js:exportDocxToJsxdata",
+              message: "export ERR host result",
+              data: { resultPreview: String(result || "").slice(0, 900) },
+              timestamp: Date.now()
+            })
+          }).catch(function () {});
+        } catch (_) {}
+        // #endregion
         log("导出失败: " + (result || "UNKNOWN_ERROR"));
         return;
       }
@@ -266,7 +321,7 @@
       fetchProbePathFromHost();
       return;
     }
-    placementIntervalId = window.setInterval(tickPlacementWatch, 30);
+    placementIntervalId = window.setInterval(tickPlacementWatch, PLACEMENT_POLL_MS);
     log("调试: 画布点击轮询已启动。");
   }
 
@@ -289,15 +344,19 @@
       return;
     }
     var hbNow = Date.now();
-    if (hbNow - lastPlacementHeartbeatTs > 1200) {
+    if (hbNow - lastPlacementHeartbeatTs > 2400) {
       lastPlacementHeartbeatTs = hbNow;
       log("调试: 监听中，等待在 PS 画布单击...");
     }
     var res = window.cep.fs.readFile(probePathUtf8);
     if (!res || res.err !== 0 || res.data == null) {
-      var t0 = Date.now();
-      if (t0 - lastTickEarlyLogTs > 1000) {
-        lastTickEarlyLogTs = t0;
+      var tProbe = Date.now();
+      if (tProbe - lastProbeReadFailLogTs > 3000) {
+        lastProbeReadFailLogTs = tProbe;
+        log(
+          "探针 readFile 失败: err=" + String(res && res.err != null ? res.err : "n/a") +
+            " path=" + String(probePathUtf8 || "").slice(0, 120)
+        );
       }
       return;
     }
@@ -534,6 +593,8 @@
           } else {
             log("锚点来源：未检测到颜色取样点，已回退到画布点击映射。");
           }
+          var mapHint0 = describeScreenToDocFail(info0.debugScreenToDocFail);
+          if (mapHint0) log("坐标映射: " + mapHint0);
           clearPendingSelection();
           log("已取消当前对白选中。");
         } else {
@@ -611,6 +672,8 @@
             ", maskStatus=" + (info.maskStatus || "") +
             ", maskPass=" + (info.maskPass || "")
           );
+          var mapHint = describeScreenToDocFail(info.debugScreenToDocFail);
+          if (mapHint) log("坐标映射: " + mapHint);
         } else {
           log("投放失败: " + (result || "UNKNOWN_ERROR"));
         }
@@ -961,4 +1024,10 @@
     else log("[diag] Host 预热: " + (s || "(空响应)"));
   });
   logRuntimeSource();
+
+  document.addEventListener("visibilitychange", function () {
+    try {
+      if (document.hidden) stopPlacementWatch();
+    } catch (_) {}
+  });
 })();

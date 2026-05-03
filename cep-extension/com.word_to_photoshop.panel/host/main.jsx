@@ -1100,8 +1100,22 @@ $.global.WORD_IMPORT_CEP._loadCoreApi = function (repoRootHint) {
     $.global.WORD_IMPORT_API = null;
   } catch (_) {}
   $.global.WORD_IMPORT_PANEL_MODE = true;
-  $.evalFile(coreFile);
-  if (!$.global.WORD_IMPORT_API) throw new Error("导入核心 API 加载失败");
+  try {
+    $.evalFile(coreFile);
+  } catch (e) {
+    var detail = [];
+    detail.push(String(e && e.message ? e.message : e));
+    detail.push("core=" + coreFile.fsName);
+    try {
+      if (e && e.line != null && e.line !== "") detail.push("line=" + String(e.line));
+    } catch (_) {}
+    try {
+      if (e && e.source) detail.push("source=" + String(e.source).slice(0, 240));
+    } catch (_) {}
+    detail.push("若已从仓库更新扩展，请重新运行 install_cep.ps1 并重启 Photoshop");
+    throw new Error(detail.join(" | "));
+  }
+  if (!$.global.WORD_IMPORT_API) throw new Error("导入核心 API 加载失败 | core=" + coreFile.fsName);
   return $.global.WORD_IMPORT_API;
 };
 
@@ -1193,19 +1207,32 @@ $.global.WORD_IMPORT_CEP.exportDocxToJsxdata = function (docxPath, outPath, repo
     var tempDir = Folder.temp;
     var runId = String(new Date().getTime());
     runner = new File(tempDir.fsName + "/word_import_export_jsxdata_" + runId + ".ps1");
+    var capFile = new File(tempDir.fsName + "/word_import_export_cap_" + runId + ".txt");
     var sq = function (p) {
       return $.global.WORD_IMPORT_CEP._quoteForPs1Sq(p);
     };
+    // -OutFile 用变量传递，避免路径中含 # 等字符时在参数字面量中被误解析；stdout/stderr 写入 cap 文件便于诊断 app.system 仅返回退出码的机器。
     var body =
       "$ErrorActionPreference='Stop'\r\n" +
-      "& '" +
+      "$cap='" +
+      sq(capFile.fsName) +
+      "'\r\n" +
+      "$outExpect='" +
+      sq(outputPath) +
+      "'\r\n" +
+      "Remove-Item -LiteralPath $cap -ErrorAction SilentlyContinue\r\n" +
+      "try {\r\n" +
+      "  & '" +
       sq(scriptFile.fsName) +
       "' -DocxPath '" +
       sq(docxFile.fsName) +
-      "' -OutFile '" +
-      sq(outputPath) +
-      "' -Minify\r\n" +
-      "exit $LASTEXITCODE\r\n";
+      "' -OutFile $outExpect -Minify 2>&1 | ForEach-Object { Add-Content -LiteralPath $cap -Value $_ -Encoding UTF8 }\r\n" +
+      "  if (-not (Test-Path -LiteralPath $outExpect)) { throw 'Export finished but output file is missing.' }\r\n" +
+      "  exit 0\r\n" +
+      "} catch {\r\n" +
+      "  $_ | Out-String | Add-Content -LiteralPath $cap -Encoding UTF8\r\n" +
+      "  exit 1\r\n" +
+      "}\r\n";
     runner.encoding = "UTF-8";
     if (!runner.open("w")) return "ERR|无法写入临时导出脚本: " + runner.fsName;
     try {
@@ -1224,17 +1251,94 @@ $.global.WORD_IMPORT_CEP.exportDocxToJsxdata = function (docxPath, outPath, repo
       try {
         if (runner && runner.exists) runner.remove();
       } catch (_) {}
-      return "ERR|执行导出命令失败: " + eSys.message;
+      return "ERR|E_SHELL " + eSys.message;
     }
 
     try {
       if (runner && runner.exists) runner.remove();
     } catch (_) {}
 
+    var capText = "";
+    try {
+      if (capFile.exists) {
+        capFile.encoding = "UTF8";
+        if (capFile.open("r")) {
+          try {
+            capText = capFile.read();
+          } finally {
+            capFile.close();
+          }
+        }
+      }
+    } catch (_) {}
+
     var outFile = new File(outputPath);
+
+    // #region agent log
+    try {
+      var dbgLine = JSON.stringify({
+        sessionId: "34d76a",
+        hypothesisId: "H_export_capture",
+        location: "exportDocxToJsxdata",
+        message: "export shell done",
+        data: {
+          systemReturn: String(output || ""),
+          outPathTail: outputPath.length > 120 ? outputPath.substring(outputPath.length - 120) : outputPath,
+          capLen: capText ? capText.length : 0,
+          outExists: !!outFile.exists
+        },
+        timestamp: new Date().getTime()
+      });
+      var adLog = $.getenv("APPDATA");
+      if (adLog) {
+        var dl = new File(adLog + "/com.word_to_photoshop/debug-34d76a.log");
+        dl.encoding = "UTF8";
+        if (dl.open("a")) {
+          try {
+            dl.writeln(dbgLine);
+          } finally {
+            dl.close();
+          }
+        }
+      }
+      var hl = new File(File($.fileName).parent.fsName + "/debug-34d76a.log");
+      hl.encoding = "UTF8";
+      if (hl.open("a")) {
+        try {
+          hl.writeln(dbgLine);
+        } finally {
+          hl.close();
+        }
+      }
+    } catch (_) {}
+    // #endregion
+
     if (!outFile.exists) {
-      return "ERR|导出失败，未生成文件。PowerShell 输出: " + output;
+      try {
+        if (capFile.exists) capFile.remove();
+      } catch (_) {}
+      var capTrim =
+        capText && capText.length > 4000 ? capText.substring(0, 4000) + "\n...(truncated)" : capText;
+      var capPart = capTrim
+        ? String(capTrim).replace(/\r\n/g, "\n").replace(/\n/g, " | ")
+        : "";
+      var exportTag = "";
+      try {
+        var capTagM = capText && String(capText).match(/\[E_[A-Z0-9_]+\]/);
+        if (capTagM) exportTag = String(capTagM[0]).replace(/^\[|\]$/g, "") + " ";
+      } catch (_) {}
+      return (
+        "ERR|" +
+        exportTag +
+        "导出失败，未生成文件。返回码/控制台: " +
+        String(output || "").replace(/^\s+|\s+$/g, "") +
+        (capPart ? " | 捕获: " + capPart : "")
+      );
     }
+
+    try {
+      if (capFile.exists) capFile.remove();
+    } catch (_) {}
 
     return "OK|" +
       $.global.WORD_IMPORT_CEP._encodeJSON({
@@ -1245,7 +1349,7 @@ $.global.WORD_IMPORT_CEP.exportDocxToJsxdata = function (docxPath, outPath, repo
     try {
       if (runner && runner.exists) runner.remove();
     } catch (_) {}
-    return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
+    return "ERR|E_HOST " + e.message + " (line: " + (e.line || "?") + ")";
   }
 };
 

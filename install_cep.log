@@ -1,12 +1,12 @@
 ﻿**********************
 Windows PowerShell transcript start
-Start time: 20260503121517
+Start time: 20260505133256
 Username: DESKTOP-5S1EKM0\Bone
 RunAs User: DESKTOP-5S1EKM0\Bone
 Configuration Name: 
 Machine: DESKTOP-5S1EKM0 (Microsoft Windows NT 10.0.22621.0)
 Host Application: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\install_cep.ps1 -NoPause
-Process ID: 20700
+Process ID: 11308
 PSVersion: 5.1.22621.3880
 PSEdition: Desktop
 PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.22621.3880
@@ -56,5 +56,5 @@ Next: restart Photoshop.
   After install you can move or delete the source folder; the extension is self-contained.
 **********************
 Windows PowerShell transcript end
-End time: 20260503121517
+End time: 20260505133257
 **********************

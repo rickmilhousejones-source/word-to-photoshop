@@ -1,4 +1,4 @@
-<#
+﻿<#
 Exports a Word .docx into a Photoshop-friendly JS data file.
 
 Features:
@@ -90,25 +90,28 @@ function Get-WordDocumentXml([string]$docxFullPath) {
 
 function New-XmlDocumentFromWordMarkup([string]$xmlText) {
   # Word 有时写入 XML 1.0 非法字符（尤其含图/复制粘贴），LoadXml 会整段失败；用 Reader 放宽校验。
-  $settings = New-Object System.Xml.XmlReaderSettings
-  $settings.CheckCharacters = $false
-  $settings.IgnoreComments = $true
-  $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
-  $stringReader = New-Object System.IO.StringReader($xmlText)
+  # 单层 try/finally：嵌套 try+return 在部分 PS 版本下会触发「意外的 }」解析错误。
+  $readerSettings = New-Object System.Xml.XmlReaderSettings
+  $readerSettings.CheckCharacters = $false
+  $readerSettings.IgnoreComments = $true
+  $readerSettings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+  $stringReader = $null
+  $reader = $null
   try {
-    $reader = [System.Xml.XmlReader]::Create($stringReader, $settings)
-    try {
-      $xmlDoc = New-Object System.Xml.XmlDocument
-      $xmlDoc.PreserveWhitespace = $true
-      $xmlDoc.Load($reader)
-      return $xmlDoc
-    }
-    finally {
-      if ($null -ne $reader) { $reader.Dispose() }
-    }
+    $stringReader = New-Object System.IO.StringReader($xmlText)
+    $reader = [System.Xml.XmlReader]::Create($stringReader, $readerSettings)
+    $xmlDoc = New-Object System.Xml.XmlDocument
+    $xmlDoc.PreserveWhitespace = $true
+    $xmlDoc.Load($reader)
+    return $xmlDoc
   }
   finally {
-    if ($null -ne $stringReader) { $stringReader.Dispose() }
+    if ($null -ne $reader) {
+      try { $reader.Dispose() } catch { }
+    }
+    if ($null -ne $stringReader) {
+      try { $stringReader.Dispose() } catch { }
+    }
   }
 }
 
@@ -219,8 +222,8 @@ function Parse-Paragraphs([string]$xmlText) {
   $paras = New-Object System.Collections.Generic.List[object]
 
   # 含 w:tbl / 内容控件等时，正文 w:p 往往不在 body 的直接子级；必须取 body 下所有段落。
-  $pNodes = $xmlDoc.SelectNodes('//w:body//w:p', $ns)
-  foreach ($p in $pNodes) {
+  # 使用 @(...) 包一层：StrictMode 下 SelectNodes 可能返回 null/单节点/XmlNodeList，避免 $pNodes 未赋值即进 foreach。
+  foreach ($p in @($xmlDoc.SelectNodes('//w:body//w:p', $ns))) {
     # 浮动文本框 / 形状内文字（非正文流）
     if ($null -ne $p.SelectSingleNode('ancestor::w:txbxContent', $ns)) { continue }
 
@@ -335,9 +338,7 @@ function ConvertTo-PhotoshopDataFile([object]$payload, [switch]$Minify) {
   } else {
     $payload | ConvertTo-Json -Depth 50
   }
-  return @"
-var WORD_IMPORT_DATA = $json;
-"@
+  return 'var WORD_IMPORT_DATA = ' + $json + ';'
 }
 
 function Copy-DocPathToTempDocxPath([string]$sourcePath) {
@@ -359,36 +360,48 @@ $payloadSourcePath = Resolve-FullPath $DocxPath
 $tempRenamedDocx = $null
 $docxFull = $payloadSourcePath
 try {
-  if ([System.IO.Path]::GetExtension($payloadSourcePath) -ieq ".doc") {
-    $docxFull = Copy-DocPathToTempDocxPath -sourcePath $payloadSourcePath
-    $tempRenamedDocx = $docxFull
-  }
-
-  if ([string]::IsNullOrWhiteSpace($OutFile)) {
-    $OutFile = Select-OutputFilePath -docxFullPath $payloadSourcePath
-  }
-
-  $outFull = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path (Get-Location) $OutFile }
-
-  $xml = Get-WordDocumentXml -docxFullPath $docxFull
-  $paragraphs = Parse-Paragraphs -xmlText $xml
-  $grouped = Group-ParagraphsByPage -paragraphs $paragraphs
-  $payload = Build-ExportPayload -docxFullPath $payloadSourcePath -groupedPages $grouped
-
-  $outDir = Split-Path -Parent $outFull
-  if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
-    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-  }
-
-  [System.IO.File]::WriteAllText($outFull, (ConvertTo-PhotoshopDataFile -payload $payload -Minify:$Minify), [System.Text.Encoding]::UTF8)
-
-  Write-Host "Wrote Photoshop data: $outFull"
-  Write-Host ("Pages found: " + $payload.pages.Count)
-  if ($payload.warnings.Count -gt 0) {
-    Write-Host "Warnings:"
-    foreach ($warning in $payload.warnings) {
-      Write-Host ("- " + $warning)
+  try {
+    if ([System.IO.Path]::GetExtension($payloadSourcePath) -ieq ".doc") {
+      $docxFull = Copy-DocPathToTempDocxPath -sourcePath $payloadSourcePath
+      $tempRenamedDocx = $docxFull
     }
+
+    if ([string]::IsNullOrWhiteSpace($OutFile)) {
+      $OutFile = Select-OutputFilePath -docxFullPath $payloadSourcePath
+    }
+
+    $outFull = if ([System.IO.Path]::IsPathRooted($OutFile)) { $OutFile } else { Join-Path (Get-Location) $OutFile }
+
+    $xml = Get-WordDocumentXml -docxFullPath $docxFull
+    $paragraphs = Parse-Paragraphs -xmlText $xml
+    $grouped = Group-ParagraphsByPage -paragraphs $paragraphs
+    $payload = Build-ExportPayload -docxFullPath $payloadSourcePath -groupedPages $grouped
+
+    $outDir = Split-Path -Parent $outFull
+    if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
+      New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+    }
+
+    [System.IO.File]::WriteAllText($outFull, (ConvertTo-PhotoshopDataFile -payload $payload -Minify:$Minify), [System.Text.Encoding]::UTF8)
+
+    Write-Host "Wrote Photoshop data: $outFull"
+    Write-Host ("Pages found: " + $payload.pages.Count)
+    if ($payload.warnings.Count -gt 0) {
+      Write-Host "Warnings:"
+      foreach ($warning in $payload.warnings) {
+        Write-Host ("- " + $warning)
+      }
+    }
+  } catch {
+    $m = $_.Exception.Message
+    $code = 'E_UNKNOWN'
+    if ($m -match '(?i)cancel') { $code = 'E_USER_CANCEL' }
+    elseif ($m -match '(?i)document\.xml|Missing') { $code = 'E_DOCX_STRUCTURE' }
+    elseif ($m -match '(?i)not found|file not found|cannot find|missing path') { $code = 'E_IO' }
+    elseif ($m -match '(?i)zip|InvalidData|corrupt') { $code = 'E_DOCX_ZIP' }
+    elseif ($m -match '(?i)access|denied|Unauthorized') { $code = 'E_IO_ACCESS' }
+    Write-Host ("[" + $code + "] " + $m)
+    throw
   }
 }
 finally {
