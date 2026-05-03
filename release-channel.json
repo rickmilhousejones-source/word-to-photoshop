@@ -1,7 +1,7 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minCompatible": "1.0.0",
-  "notes": "与 CEP manifest ExtensionBundleVersion 1.1.0 同步。发版时请同时更新 manifest.xml、client/host BUILD_ID 与本文件 version。",
+  "notes": "与 CEP manifest ExtensionBundleVersion 1.2.0 同步。发版时请同时更新 manifest.xml、client/host BUILD_ID 与本文件 version。",
   "releaseUrl": "https://github.com/rickmilhousejones-source/word-to-photoshop/releases",
   "downloadUrl": "https://github.com/rickmilhousejones-source/word-to-photoshop/archive/refs/heads/master.zip",
   "downloadFileName": "word-to-photoshop-master.zip"

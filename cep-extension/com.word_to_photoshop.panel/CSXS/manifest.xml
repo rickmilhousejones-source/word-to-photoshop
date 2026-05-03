@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<ExtensionManifest Version="7.0" ExtensionBundleId="com.word_to_photoshop.bundle" ExtensionBundleVersion="1.1.0" ExtensionBundleName="Word To Photoshop CEP">
+<ExtensionManifest Version="7.0" ExtensionBundleId="com.word_to_photoshop.bundle" ExtensionBundleVersion="1.2.0" ExtensionBundleName="Word To Photoshop CEP">
   <ExtensionList>
-    <Extension Id="com.word_to_photoshop.panel" Version="1.1.0"/>
+    <Extension Id="com.word_to_photoshop.panel" Version="1.2.0"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>

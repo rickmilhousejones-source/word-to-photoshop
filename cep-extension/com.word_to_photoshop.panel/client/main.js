@@ -1,7 +1,7 @@
 (function () {
-  var BUILD_ID = "2026-05-02T12:00+08 cep-v1.1";
+  var BUILD_ID = "2026-05-03T12:00+08 cep-v1.2";
   /** Keep in sync with CSXS/manifest.xml ExtensionBundleVersion and release-channel.json. */
-  var EXTENSION_BUNDLE_VERSION = "1.1.0";
+  var EXTENSION_BUNDLE_VERSION = "1.2.0";
   /** 检查更新（测试）：仅此渠道，直接打开腾讯文档，不请求 release-channel.json。 */
   var UPDATE_DOCS_URL = "https://docs.qq.com/doc/DRG9LcFd0S1pab1RZ";
   var logBox = document.getElementById("logBox");
@@ -716,24 +716,37 @@
   }
 
   function initRepoRootHint() {
+    // The host (host\main.jsx) is now self-contained: runtime scripts live in
+    // host\repo\ inside the extension itself, so no client-side hint is needed.
+    // We still read the legacy host\repo_path.txt silently to preserve old setups
+    // (older installer versions or dev workflows) without spamming the log.
     try {
-      if (!window.__adobe_cep__ || !window.__adobe_cep__.getSystemPath || !window.cep || !window.cep.fs) {
-        log("未检测到 CEP 文件系统 API，将使用 Host 侧自动定位。");
-        return;
-      }
+      if (!window.__adobe_cep__ || !window.__adobe_cep__.getSystemPath || !window.cep || !window.cep.fs) return;
       var extPath = window.__adobe_cep__.getSystemPath("extension");
       if (!extPath) return;
       var marker = extPath + "/host/repo_path.txt";
       var res = window.cep.fs.readFile(marker);
       if (res && res.err === 0) {
         repoRootHint = sanitizeRepoText(res.data);
-        if (repoRootHint) log("已读取项目路径标记。");
-      } else {
-        log("未读取到项目路径标记，将使用 Host 侧自动定位。");
       }
-    } catch (e) {
-      log("读取项目路径标记失败: " + e.message);
-    }
+    } catch (_) {}
+  }
+
+  function logRuntimeSource() {
+    callHost("WORD_IMPORT_CEP.getRuntimeSource()", function (r) {
+      var s = String(r || "");
+      if (s.indexOf("OK|") !== 0) return;
+      var rest = s.slice(3);
+      var sep = rest.indexOf("|");
+      var kind = sep >= 0 ? rest.slice(0, sep) : rest;
+      var path = sep >= 0 ? rest.slice(sep + 1) : "";
+      var label;
+      if (kind === "bundled") label = "脚本运行时来源：内置（host\\repo）";
+      else if (kind === "legacy") label = "脚本运行时来源：外部（兼容旧版安装）";
+      else if (kind === "missing") label = "脚本运行时缺失，请重新运行 install_cep.ps1";
+      else label = "脚本运行时来源：" + kind;
+      log(label + (path ? "，路径=" + path : ""));
+    });
   }
 
   document.getElementById("btnOpenPanel").addEventListener("click", function () {
@@ -928,7 +941,7 @@
   if (!isCepHost()) {
     showNoCepBanner();
     log(
-      "漫画汉化导入助手 1.1 已加载，但未检测到 CEP（无法与 Photoshop 通信）。build=" +
+      "漫画汉化导入助手 1.2 已加载，但未检测到 CEP（无法与 Photoshop 通信）。build=" +
         BUILD_ID +
         " v=" +
         EXTENSION_BUNDLE_VERSION
@@ -940,11 +953,12 @@
   bootstrapCursorProbe();
   reloadQuotes();
   log(
-    "漫画汉化导入助手 1.1（CEP）已启动。build=" + BUILD_ID + " v=" + EXTENSION_BUNDLE_VERSION
+    "漫画汉化导入助手 1.2（CEP）已启动。build=" + BUILD_ID + " v=" + EXTENSION_BUNDLE_VERSION
   );
   callHost("WORD_IMPORT_CEP.ping()", function (r) {
     var s = String(r || "");
     if (s.indexOf("PONG") >= 0) log("Host 预热成功: " + s.slice(0, 96));
     else log("[diag] Host 预热: " + (s || "(空响应)"));
   });
+  logRuntimeSource();
 })();

@@ -1,5 +1,6 @@
 param(
-  [switch]$NoPause
+  [switch]$NoPause,
+  [switch]$NoFonts
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +15,30 @@ function Ensure-Dir([string]$path) {
   if (-not (Test-Path -LiteralPath $path)) {
     New-Item -ItemType Directory -Path $path -Force | Out-Null
   }
+}
+
+function Copy-Payload([string]$src, [string]$dst) {
+  if (-not (Test-Path -LiteralPath $src)) {
+    Write-WarnMsg "Payload source not found, skipped: $src"
+    return $false
+  }
+  $parent = Split-Path -Parent $dst
+  if ($parent) { Ensure-Dir $parent }
+  $isDir = (Get-Item -LiteralPath $src).PSIsContainer
+  if ($isDir) {
+    if (Test-Path -LiteralPath $dst) {
+      Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Ensure-Dir $dst
+    Get-ChildItem -LiteralPath $src -Force | ForEach-Object {
+      if ($_.PSIsContainer -and $_.Name -ieq "__pycache__") { return }
+      $target = Join-Path $dst $_.Name
+      Copy-Item -LiteralPath $_.FullName -Destination $target -Recurse -Force
+    }
+  } else {
+    Copy-Item -LiteralPath $src -Destination $dst -Force
+  }
+  return $true
 }
 
 try {
@@ -34,6 +59,23 @@ try {
     throw "Extension source folder not found: $sourceDir"
   }
 
+  # Runtime payload bundled into extension's host\repo\ at install time.
+  # Each entry: source path (relative to repo root) -> destination filename under host\repo\.
+  $repoFiles = @(
+    @{ Src = "import_to_photoshop.jsx";       Dst = "import_to_photoshop.jsx" },
+    @{ Src = "import_panel.jsx";              Dst = "import_panel.jsx" },
+    @{ Src = "export_docx_styles.ps1";        Dst = "export_docx_styles.ps1" },
+    @{ Src = "start_cursor_daemon.ps1";       Dst = "start_cursor_daemon.ps1" },
+    @{ Src = "cursor_probe.ps1";              Dst = "cursor_probe.ps1" },
+    @{ Src = "cursor_daemon.ps1";             Dst = "cursor_daemon.ps1" }
+  )
+  $repoDirs = @(
+    @{ Src = "tools";                         Dst = "tools" }
+  )
+  if (-not $NoFonts) {
+    $repoDirs += @{ Src = "fonts";            Dst = "fonts" }
+  }
+
   $installedCount = 0
   foreach ($base in $destBases) {
     if ([string]::IsNullOrWhiteSpace($base)) { continue }
@@ -47,9 +89,32 @@ try {
       Write-Info "Copying extension files to: $destDir"
       Copy-Item -LiteralPath $sourceDir -Destination $destDir -Recurse -Force
       Write-Ok "Extension files copied to: $destDir"
-      $repoMarker = Join-Path $destDir "host\repo_path.txt"
-      Set-Content -LiteralPath $repoMarker -Value $scriptDir -Encoding Ascii
-      Write-Ok "Repo marker written: $repoMarker"
+
+      $repoDest = Join-Path $destDir "host\repo"
+      Ensure-Dir $repoDest
+      Write-Info "Bundling runtime payload into: $repoDest"
+      foreach ($entry in $repoFiles) {
+        $src = Join-Path $scriptDir $entry.Src
+        $dst = Join-Path $repoDest $entry.Dst
+        [void](Copy-Payload $src $dst)
+      }
+      foreach ($entry in $repoDirs) {
+        $src = Join-Path $scriptDir $entry.Src
+        $dst = Join-Path $repoDest $entry.Dst
+        [void](Copy-Payload $src $dst)
+      }
+
+      # Ship the current settings.json as a default template (never overwrites user's later edits).
+      $defaultSettingsSrc = Join-Path $scriptDir "settings.json"
+      if (Test-Path -LiteralPath $defaultSettingsSrc) {
+        $defaultSettingsDst = Join-Path $repoDest "settings.default.json"
+        Copy-Item -LiteralPath $defaultSettingsSrc -Destination $defaultSettingsDst -Force
+        Write-Ok "Default settings template written: $defaultSettingsDst"
+      } else {
+        Write-WarnMsg "settings.json not found at repo root, skipping default template."
+      }
+
+      Write-Ok "Runtime payload bundled."
       $installedCount++
     } catch {
       Write-WarnMsg "Skipping path due to permission or IO error: $base"
@@ -61,8 +126,45 @@ try {
     throw "Installation failed: no extension path was writable."
   }
 
-  [Environment]::SetEnvironmentVariable("WORD_IMPORT_REPO_PATH", $scriptDir, "User")
-  Write-Ok "User environment variable set: WORD_IMPORT_REPO_PATH=$scriptDir"
+  # Also populate host\repo inside the *workspace* extension source (cep-extension\...\).
+  # Needed when Photoshop loads a dev / mis-linked extension whose extRoot is the repo parent:
+  # host\main.jsx then resolves bundled via walking to cep-extension\...\host\repo.
+  $srcRepoDest = Join-Path $sourceDir "host\repo"
+  Ensure-Dir $srcRepoDest
+  Write-Info "Syncing runtime payload to workspace extension source: $srcRepoDest"
+  foreach ($entry in $repoFiles) {
+    $src = Join-Path $scriptDir $entry.Src
+    $dst = Join-Path $srcRepoDest $entry.Dst
+    [void](Copy-Payload $src $dst)
+  }
+  foreach ($entry in $repoDirs) {
+    $src = Join-Path $scriptDir $entry.Src
+    $dst = Join-Path $srcRepoDest $entry.Dst
+    [void](Copy-Payload $src $dst)
+  }
+  $defaultSettingsSrcSync = Join-Path $scriptDir "settings.json"
+  if (Test-Path -LiteralPath $defaultSettingsSrcSync) {
+    Copy-Item -LiteralPath $defaultSettingsSrcSync -Destination (Join-Path $srcRepoDest "settings.default.json") -Force
+    Write-Ok "Default settings template synced to source extension."
+  }
+  Write-Ok "Workspace extension host\\repo is up to date."
+
+  # Ensure user-writable data root exists so first-launch settings/calibration writes succeed.
+  $userDataRoot = Join-Path $env:APPDATA "com.word_to_photoshop"
+  Ensure-Dir $userDataRoot
+  Write-Ok "User data folder ready: $userDataRoot"
+
+  # Legacy cleanup: previous versions wrote a user env var pointing at the source repo.
+  # The extension is now self-contained, so this var is no longer needed.
+  try {
+    $legacyEnv = [Environment]::GetEnvironmentVariable("WORD_IMPORT_REPO_PATH", "User")
+    if ($legacyEnv) {
+      [Environment]::SetEnvironmentVariable("WORD_IMPORT_REPO_PATH", $null, "User")
+      Write-Ok "Legacy env var removed: WORD_IMPORT_REPO_PATH (was: $legacyEnv)"
+    }
+  } catch {
+    Write-WarnMsg "Failed to clean legacy env var: $($_.Exception.Message)"
+  }
 
   # CC 2017 uses CSXS.7; CC 2018 uses CSXS.8 — enable unsigned panels for both + newer runtimes.
   $csxsVersions = 7..20
@@ -78,6 +180,7 @@ try {
   Write-Host "Next: restart Photoshop."
   Write-Host "  PS CC 2018: Window > Extensions > Word Import CEP (menu label may differ by language)."
   Write-Host "  PS 2020+: often Window > Extensions (Legacy) > Word Import CEP"
+  Write-Host "  After install you can move or delete the source folder; the extension is self-contained."
 } catch {
   Write-ErrMsg $_.Exception.Message
   try { Write-Host "Log file: $logFile" } catch {}

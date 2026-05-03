@@ -53,7 +53,43 @@
   var DEFAULT_FONT_REGULAR_FALLBACK = ["MicrosoftYaHei", "MicrosoftYaHeiUI", "MicrosoftYaHeiUI-Regular"];
   var DEFAULT_FONT_BOLD_FALLBACK = ["MicrosoftYaHei-Bold", "MicrosoftYaHeiUI-Bold"];
 
-  var w = new Window("palette", "漫画汉化导入助手 1.1 · 完整导入面板", undefined, { resizeable: true });
+  function getUserDataFolder() {
+    try {
+      var appdata = $.getenv("APPDATA");
+      if (!appdata) return null;
+      var f = new Folder(appdata + "/com.word_to_photoshop");
+      if (!f.exists) {
+        try { f.create(); } catch (_) {}
+      }
+      return f.exists ? f : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function getBundledFontsFolder() {
+    try {
+      var root = File($.fileName).parent;
+      if (!root) return null;
+      var f = new Folder(root.fsName + "/fonts");
+      return f.exists ? f : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function getUserFontsFolder(create) {
+    var root = getUserDataFolder();
+    if (!root) return null;
+    var fonts = new Folder(root.fsName + "/fonts");
+    if (!fonts.exists) {
+      if (!create) return null;
+      try { fonts.create(); } catch (_) {}
+    }
+    return fonts.exists ? fonts : null;
+  }
+
+  var w = new Window("palette", "漫画汉化导入助手 1.2 · 完整导入面板", undefined, { resizeable: true });
   w.orientation = "column";
   w.alignChildren = "fill";
   w.spacing = 10;
@@ -68,7 +104,7 @@
   var topLine = topBar.add("group");
   topLine.orientation = "row";
   topLine.alignment = "fill";
-  var brandTitle = topLine.add("statictext", undefined, "漫画汉化导入助手 1.1 · 完整导入面板");
+  var brandTitle = topLine.add("statictext", undefined, "漫画汉化导入助手 1.2 · 完整导入面板");
   var topSpacer = topLine.add("statictext", undefined, "");
   topSpacer.alignment = ["fill", "center"];
   var btnClosePanel = topLine.add("button", undefined, "×");
@@ -138,7 +174,7 @@
   cfgPanel.add(
     "statictext",
     undefined,
-    "提示：框宽、起始坐标、列间距等参数请在 settings.json 中调整。",
+    "提示：框宽、起始坐标、列间距等参数请在 settings.json 中调整（位置：%APPDATA%\\com.word_to_photoshop\\settings.json）。",
     { multiline: false }
   );
 
@@ -160,13 +196,13 @@
   var rowFontImport = cfgPanel.add("group");
   rowFontImport.spacing = 8;
   var btnPickFontFile = rowFontImport.add("button", undefined, "刷新系统字体列表");
-  btnPickFontFile.helpTip = "扫描项目 fonts/ 并刷新字体下拉项";
+  btnPickFontFile.helpTip = "扫描扩展内置 fonts/ 与 %APPDATA%\\com.word_to_photoshop\\fonts，并刷新字体下拉项";
   var btnSaveDefaults = rowFontImport.add("button", undefined, "保存为默认");
 
   var rowFontImport2 = cfgPanel.add("group");
   rowFontImport2.spacing = 8;
-  var btnCopyFontToRepo = rowFontImport2.add("button", undefined, "复制字体到项目 fonts…");
-  btnCopyFontToRepo.helpTip = "选择 ttf/otf/ttc，复制到仓库 fonts/ 并尝试写入当前排版字体设置";
+  var btnCopyFontToRepo = rowFontImport2.add("button", undefined, "复制字体到用户目录…");
+  btnCopyFontToRepo.helpTip = "选择 ttf/otf/ttc，复制到 %APPDATA%\\com.word_to_photoshop\\fonts 并尝试写入当前排版字体设置";
   var btnInstallFontUser = rowFontImport2.add("button", undefined, "安装字体到当前用户…");
   btnInstallFontUser.helpTip = "复制到 Windows 用户字体目录并注册（仅当前用户）；可能需要重启 PS 后在下拉中看到";
 
@@ -364,13 +400,28 @@
     try { dd.removeAll(); } catch (_) {}
   }
   function matchFontFilesInProject() {
-    var scriptRoot = File($.fileName).parent;
-    var fontsDir = new Folder(scriptRoot.fsName + "/fonts");
-    if (!fontsDir.exists) return [];
-    var files = fontsDir.getFiles(function (f) {
-      try { return f instanceof File && /\.(ttf|otf|ttc|otc)$/i.test(f.name); } catch (_) { return false; }
-    });
-    return files || [];
+    var out = [];
+    var seen = {};
+    var dirs = [];
+    try { var bundled = getBundledFontsFolder(); if (bundled) dirs.push(bundled); } catch (_) {}
+    try { var userDir = getUserFontsFolder(false); if (userDir) dirs.push(userDir); } catch (_) {}
+    for (var i = 0; i < dirs.length; i++) {
+      var fontsDir = dirs[i];
+      var files = null;
+      try {
+        files = fontsDir.getFiles(function (f) {
+          try { return f instanceof File && /\.(ttf|otf|ttc|otc)$/i.test(f.name); } catch (_) { return false; }
+        });
+      } catch (_) { files = null; }
+      if (!files) continue;
+      for (var k = 0; k < files.length; k++) {
+        var key = String(files[k].fsName).toLowerCase();
+        if (seen[key]) continue;
+        seen[key] = true;
+        out.push(files[k]);
+      }
+    }
+    return out;
   }
   function collectSystemFontFileEntries() {
     var out = [];
@@ -592,10 +643,9 @@
   }
 
   function copyToFontsFolder(srcFile, overwrite) {
-    var scriptRoot = File($.fileName).parent;
-    var fontsDir = new Folder(scriptRoot.fsName + "/fonts");
-    if (!ensureFolderExists(fontsDir)) {
-      throw new Error("无法创建 fonts 目录: " + fontsDir.fsName);
+    var fontsDir = getUserFontsFolder(true);
+    if (!fontsDir) {
+      throw new Error("无法创建用户字体目录（%APPDATA%\\com.word_to_photoshop\\fonts）。");
     }
     var dst = new File(fontsDir.fsName + "/" + srcFile.name);
     if (dst.exists && overwrite !== true) {
@@ -741,13 +791,13 @@
       if (mode === "copy" || mode === "both") {
         try {
           workFile = copyToFontsFolder(picked, false);
-          extraLogs.push("已复制到项目 fonts/: " + workFile.fsName);
+          extraLogs.push("已复制到用户字体目录: " + workFile.fsName);
         } catch (eCopy) {
           var msg = String(eCopy && eCopy.message ? eCopy.message : eCopy);
           if (msg.indexOf("目标已存在") >= 0) {
-            if (!confirm("fonts 目录已存在同名文件，是否覆盖？")) return;
+            if (!confirm("用户字体目录中已存在同名文件，是否覆盖？")) return;
             workFile = copyToFontsFolder(picked, true);
-            extraLogs.push("已覆盖项目 fonts/: " + workFile.fsName);
+            extraLogs.push("已覆盖用户字体目录: " + workFile.fsName);
           } else {
             throw eCopy;
           }
@@ -776,18 +826,28 @@
 
   function ensureDefaultYaHeiBaseline(logFn) {
     try {
-      var scriptRoot = File($.fileName).parent;
-      var fontsDir = new Folder(scriptRoot.fsName + "/fonts");
-      if (!fontsDir.exists) {
-        if (typeof logFn === "function") logFn("字体基线检查: fonts/ 目录不存在。");
+      var dirs = [];
+      var bundled = getBundledFontsFolder(); if (bundled) dirs.push(bundled);
+      var userDir = getUserFontsFolder(false); if (userDir) dirs.push(userDir);
+      if (!dirs.length) {
+        if (typeof logFn === "function") logFn("字体基线检查: fonts/ 目录不存在（内置与 %APPDATA%\\com.word_to_photoshop\\fonts 均缺失）。");
         return;
       }
-      var f1 = new File(fontsDir.fsName + "/msyh.ttc");
-      var f2 = new File(fontsDir.fsName + "/msyhbd.ttc");
-      if (f1.exists && f2.exists) {
-        if (typeof logFn === "function") logFn("字体基线检查: 已检测到默认微软雅黑资源（msyh.ttc + msyhbd.ttc）。");
+      var hitRegular = false;
+      var hitBold = false;
+      var hitFrom = "";
+      for (var i = 0; i < dirs.length; i++) {
+        var f1 = new File(dirs[i].fsName + "/msyh.ttc");
+        var f2 = new File(dirs[i].fsName + "/msyhbd.ttc");
+        if (f1.exists) { hitRegular = true; hitFrom = dirs[i].fsName; }
+        if (f2.exists) { hitBold = true; hitFrom = dirs[i].fsName; }
+        if (hitRegular && hitBold) break;
+      }
+      if (typeof logFn !== "function") return;
+      if (hitRegular && hitBold) {
+        logFn("字体基线检查: 已检测到默认微软雅黑资源（msyh.ttc + msyhbd.ttc，目录=" + hitFrom + "）。");
       } else {
-        if (typeof logFn === "function") logFn("字体基线检查: 缺少默认微软雅黑资源，请补齐 msyh.ttc / msyhbd.ttc。");
+        logFn("字体基线检查: 缺少默认微软雅黑资源，请补齐 msyh.ttc / msyhbd.ttc。");
       }
     } catch (e) {
       if (typeof logFn === "function") logFn("字体基线检查失败: " + e.message);

@@ -3,7 +3,9 @@
 /*
 Import one page from a .jsxdata file.
 Each Word paragraph becomes one Photoshop paragraph text box.
-Settings are read from settings.json beside this script.
+Settings are read from %APPDATA%\com.word_to_photoshop\settings.json (per-user, persistent).
+On first launch, the file is initialized from the bundled settings.default.json
+(or, for legacy installs, copied from the script folder / WORD_IMPORT_REPO_PATH).
 */
 
 (function () {
@@ -23,7 +25,7 @@ Settings are read from settings.json beside this script.
     }
 
     var scriptFile = new File($.fileName);
-    var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
+    var settingsFile = getSettingsFile(scriptFile);
     var cfg = loadSettings(settingsFile);
 
     var dataFile = pickDataFile(app.activeDocument, cfg, scriptFile);
@@ -63,7 +65,7 @@ Settings are read from settings.json beside this script.
 
     var doc = app.activeDocument;
     var scriptFile = new File($.fileName);
-    var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
+    var settingsFile = getSettingsFile(scriptFile);
     var cfg = loadSettings(settingsFile);
     var autoDataFile = tryAutoPickDataFile(doc, cfg);
     var payload = null;
@@ -133,6 +135,85 @@ Settings are read from settings.json beside this script.
       logger(formatImportSummary(result));
     }
     return result;
+  }
+
+  function getUserDataFolder() {
+    try {
+      var appdata = $.getenv("APPDATA");
+      if (!appdata) return null;
+      var f = new Folder(appdata + "/com.word_to_photoshop");
+      if (!f.exists) {
+        try { f.create(); } catch (_) {}
+      }
+      return f.exists ? f : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function copyFileText(src, dst) {
+    try {
+      if (!src || !src.exists || !dst) return false;
+      src.encoding = "UTF-8";
+      if (!src.open("r")) return false;
+      var raw = "";
+      try { raw = src.read(); } finally { src.close(); }
+      if (!raw) return false;
+      dst.encoding = "UTF-8";
+      if (!dst.open("w")) return false;
+      try { dst.write(raw); } finally { dst.close(); }
+      return true;
+    } catch (_) {
+      try { src.close(); } catch (__) {}
+      try { dst.close(); } catch (__) {}
+      return false;
+    }
+  }
+
+  function tryMigrateLegacySettings(scriptFile, target) {
+    try {
+      if (!target || target.exists) return target && target.exists ? target : null;
+      var sources = [];
+      try {
+        if (scriptFile && scriptFile.parent) {
+          var bundledDefault = new File(scriptFile.parent.fsName + "/settings.default.json");
+          if (bundledDefault.exists) sources.push(bundledDefault);
+          var beside = new File(scriptFile.parent.fsName + "/settings.json");
+          if (beside.exists && beside.fsName !== target.fsName) sources.push(beside);
+        }
+      } catch (_) {}
+      try {
+        var envPath = $.getenv("WORD_IMPORT_REPO_PATH");
+        if (envPath) {
+          envPath = String(envPath).replace(/[\u0000\r\n]/g, "").replace(/^\s+|\s+$/g, "").replace(/^["']|["']$/g, "");
+          if (envPath) {
+            var envFile = new File(envPath + "/settings.json");
+            if (envFile.exists && envFile.fsName !== target.fsName) sources.push(envFile);
+          }
+        }
+      } catch (_) {}
+
+      for (var i = 0; i < sources.length; i++) {
+        if (copyFileText(sources[i], target)) return target;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function getSettingsFile(scriptFile) {
+    var userRoot = getUserDataFolder();
+    if (userRoot) {
+      var preferred = new File(userRoot.fsName + "/settings.json");
+      if (preferred.exists) return preferred;
+      tryMigrateLegacySettings(scriptFile, preferred);
+      return preferred;
+    }
+    try {
+      if (scriptFile && scriptFile.parent) {
+        return new File(scriptFile.parent.fsName + "/settings.json");
+      }
+    } catch (_) {}
+    return new File("settings.json");
   }
 
   function loadSettings(f) {
@@ -1276,25 +1357,10 @@ Settings are read from settings.json beside this script.
 
   function getRepoRootForMaskTools() {
     try {
-      var envPath = $.getenv("WORD_IMPORT_REPO_PATH");
-      envPath = String(envPath == null ? "" : envPath);
-      if (envPath.length && envPath.charCodeAt(0) === 0xFEFF) envPath = envPath.substring(1);
-      envPath = envPath.replace(/\r/g, "").replace(/\n/g, "").replace(/^\s+|\s+$/g, "");
-      while (envPath.length && (envPath.charAt(0) === "\"" || envPath.charAt(0) === "'")) envPath = envPath.substring(1);
-      while (envPath.length && (envPath.charAt(envPath.length - 1) === "\"" || envPath.charAt(envPath.length - 1) === "'")) {
-        envPath = envPath.substring(0, envPath.length - 1);
-      }
-      if (envPath) {
-        var ef = new Folder(envPath);
-        if (ef.exists) return ef;
-      }
-    } catch (_) {}
-    try {
       var scriptFile = new File($.fileName);
-      return scriptFile.parent;
-    } catch (_) {
-      return null;
-    }
+      if (scriptFile && scriptFile.parent) return scriptFile.parent;
+    } catch (_) {}
+    return null;
   }
 
   function guessPageFromMaskStem(stem) {
@@ -1747,7 +1813,7 @@ Settings are read from settings.json beside this script.
     var paraIx = payload.paragraph != null ? payload.paragraph : 0;
 
     var scriptFile = new File($.fileName);
-    var settingsFile = new File(scriptFile.parent.fsName + "/settings.json");
+    var settingsFile = getSettingsFile(scriptFile);
     var cfg = loadSettings(settingsFile);
 
     var anchorMode = payload && payload.anchorMode ? String(payload.anchorMode) : "fraction";

@@ -12,9 +12,6 @@ echo   Repo: %CD%
 echo   This will kill PS-related processes, uninstall, install, then try to start PS.
 echo ============================================================
 echo.
-pause
-
-echo.
 echo ==========================================
 echo [1/4] Stop Photoshop / CEP related processes
 echo ==========================================
@@ -39,7 +36,6 @@ echo ==========================================
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\uninstall_cep.ps1" -NoPause
 if errorlevel 1 (
   echo [ERR] uninstall failed
-  pause
   exit /b 1
 )
 echo [OK] uninstall done
@@ -51,7 +47,6 @@ echo ==========================================
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ".\install_cep.ps1" -NoPause
 if errorlevel 1 (
   echo [ERR] install failed
-  pause
   exit /b 1
 )
 
@@ -82,5 +77,4 @@ powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
 
 echo.
 echo [OK] full reinstall done
-pause
 exit /b 0

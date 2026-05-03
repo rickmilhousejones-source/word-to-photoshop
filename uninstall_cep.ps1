@@ -1,5 +1,6 @@
 param(
-  [switch]$NoPause
+  [switch]$NoPause,
+  [switch]$PurgeUserData
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,8 +36,33 @@ try {
     }
   }
 
-  [Environment]::SetEnvironmentVariable("WORD_IMPORT_REPO_PATH", $null, "User")
-  Write-Ok "User environment variable removed: WORD_IMPORT_REPO_PATH"
+  # Legacy env var (older installer set this so the host could find the repo).
+  # The current extension is self-contained and does not need it; remove for cleanliness.
+  try {
+    [Environment]::SetEnvironmentVariable("WORD_IMPORT_REPO_PATH", $null, "User")
+    Write-Ok "User environment variable removed: WORD_IMPORT_REPO_PATH"
+  } catch {
+    Write-WarnMsg "Failed to remove legacy env var: $($_.Exception.Message)"
+  }
+
+  $userDataRoot = Join-Path $env:APPDATA "com.word_to_photoshop"
+  if ($PurgeUserData) {
+    if (Test-Path -LiteralPath $userDataRoot) {
+      try {
+        Remove-Item -LiteralPath $userDataRoot -Recurse -Force
+        Write-Ok "User data folder removed (PurgeUserData): $userDataRoot"
+      } catch {
+        Write-WarnMsg "Failed to remove user data folder: $($_.Exception.Message)"
+      }
+    } else {
+      Write-Info "User data folder not present, nothing to purge: $userDataRoot"
+    }
+  } else {
+    if (Test-Path -LiteralPath $userDataRoot) {
+      Write-Info "User data preserved: $userDataRoot"
+      Write-Info "  (Pass -PurgeUserData to also delete settings.json / cursor_calibration.json / fonts/.)"
+    }
+  }
 
   Write-Host ""
   Write-Ok "CEP uninstall completed."

@@ -4,10 +4,29 @@ if (!$.global.WORD_IMPORT_CEP) {
   $.global.WORD_IMPORT_CEP = {};
 }
 
-$.global.WORD_IMPORT_CEP.BUILD_ID = "2026-05-02T12:00+08 cep-v1.1";
+$.global.WORD_IMPORT_CEP.BUILD_ID = "2026-05-03T12:00+08 cep-v1.2";
 
 $.global.WORD_IMPORT_CEP.ping = function () {
   return "PONG|Photoshop CEP Host Ready|build=" + ($.global.WORD_IMPORT_CEP.BUILD_ID || "");
+};
+
+/**
+ * Identify which copy of the runtime scripts the host is using.
+ * Returns OK|<source>|<resolvedPath>, where <source> is one of:
+ *   - "bundled"  : extension's own host/repo/  (preferred)
+ *   - "legacy"   : env / repo_path.txt / dev fallback
+ *   - "missing"  : nothing usable found
+ */
+$.global.WORD_IMPORT_CEP.getRuntimeSource = function () {
+  try {
+    var bundled = $.global.WORD_IMPORT_CEP._getBundledRepoRoot();
+    if (bundled) return "OK|bundled|" + bundled.fsName;
+    var resolved = $.global.WORD_IMPORT_CEP.getRepoRoot();
+    if (resolved) return "OK|legacy|" + resolved.fsName;
+    return "OK|missing|";
+  } catch (e) {
+    return "ERR|" + e.message;
+  }
 };
 
 /**
@@ -334,45 +353,134 @@ $.global.WORD_IMPORT_CEP._jsxdataBaseNameFromDocxFile = function (docxFile) {
   }
 };
 
+$.global.WORD_IMPORT_CEP.getUserDataRoot = function () {
+  try {
+    var appdata = $.getenv("APPDATA");
+    if (!appdata) return null;
+    var f = new Folder(appdata + "/com.word_to_photoshop");
+    if (!f.exists) {
+      try { f.create(); } catch (_) {}
+    }
+    return f.exists ? f : null;
+  } catch (_) {
+    return null;
+  }
+};
+
+$.global.WORD_IMPORT_CEP._getBundledRepoRoot = function () {
+  function coreExistsInFolder(fol) {
+    try {
+      if (!fol || !fol.exists) return false;
+      return new File(fol.fsName + "/import_to_photoshop.jsx").exists;
+    } catch (_) {
+      return false;
+    }
+  }
+  try {
+    var mainFile = new File($.fileName);
+    var hostDir = mainFile.parent;
+    var extRoot = hostDir.parent;
+    var relPanel = "/cep-extension/com.word_to_photoshop.panel/host/repo";
+    var cands = [];
+    cands.push(extRoot.fsName + "/host/repo");
+    cands.push(hostDir.fsName + "/repo");
+    var walk = extRoot;
+    for (var i = 0; i < 14 && walk; i++) {
+      cands.push(walk.fsName + relPanel);
+      try {
+        walk = walk.parent;
+      } catch (_) {
+        walk = null;
+      }
+    }
+    for (var j = 0; j < cands.length; j++) {
+      try {
+        var f = new Folder(cands[j]);
+        if (coreExistsInFolder(f)) return f;
+      } catch (_) {}
+    }
+    // Last resort: canonical per-user install path (install_cep.ps1 always writes here).
+    // Fixes CEP Symbolic / dev roots where $.fileName sits under e.g. D:\...\host\main.jsx
+    // but the real bundled scripts only exist under AppData.
+    try {
+      var ad = $.getenv("APPDATA");
+      if (ad) {
+        var appdataBundle = new Folder(ad + "/Adobe/CEP/extensions/com.word_to_photoshop.panel/host/repo");
+        if (coreExistsInFolder(appdataBundle)) return appdataBundle;
+      }
+    } catch (_) {}
+  } catch (_) {}
+  return null;
+};
+
 $.global.WORD_IMPORT_CEP.diagnoseRepoRoot = function () {
-  var extRoot = new File($.fileName).parent.parent;
-  var marker = new File(extRoot.fsName + "/host/repo_path.txt");
   var out = [];
   out.push("host=" + $.fileName);
   try { out.push("env=" + $.getenv("WORD_IMPORT_REPO_PATH")); } catch (_) {}
-  out.push("extRoot=" + extRoot.fsName);
-  out.push("marker=" + marker.fsName);
-  out.push("markerExists=" + marker.exists);
   try {
+    var extRoot = new File($.fileName).parent.parent;
+    out.push("extRoot=" + extRoot.fsName);
+    var bundled = new Folder(extRoot.fsName + "/host/repo");
+    out.push("bundled=" + bundled.fsName);
+    out.push("bundledExists=" + bundled.exists);
+    if (bundled.exists) {
+      var coreFile = new File(bundled.fsName + "/import_to_photoshop.jsx");
+      out.push("bundledCoreExists=" + coreFile.exists);
+    }
+    try {
+      var ad0 = $.getenv("APPDATA");
+      if (ad0) {
+        var ab0 = new Folder(ad0 + "/Adobe/CEP/extensions/com.word_to_photoshop.panel/host/repo");
+        out.push("appdataBundle=" + ab0.fsName);
+        out.push("appdataBundleCoreExists=" + new File(ab0.fsName + "/import_to_photoshop.jsx").exists);
+      }
+    } catch (_) {}
+    var marker = new File(extRoot.fsName + "/host/repo_path.txt");
+    out.push("legacyMarker=" + marker.fsName);
+    out.push("legacyMarkerExists=" + marker.exists);
     if (marker.exists && marker.open("r")) {
       var raw = marker.read();
       marker.close();
       var p = $.global.WORD_IMPORT_CEP._sanitizePathText(raw);
-      out.push("markerRawLen=" + String(raw).length);
-      out.push("markerPath=" + p);
-      var f = new Folder(p);
-      out.push("folderExists=" + f.exists);
+      out.push("legacyMarkerPath=" + p);
+      var lf = new Folder(p);
+      out.push("legacyFolderExists=" + lf.exists);
     }
   } catch (e) {
-    out.push("markerReadErr=" + e.message);
+    out.push("diagErr=" + e.message);
   }
+  try {
+    var udr = $.global.WORD_IMPORT_CEP.getUserDataRoot();
+    out.push("userDataRoot=" + (udr ? udr.fsName : "(none)"));
+  } catch (_) {}
+  try {
+    var resolved = $.global.WORD_IMPORT_CEP.getRepoRoot();
+    out.push("resolved=" + (resolved ? resolved.fsName : "(null)"));
+  } catch (_) {}
   return out.join("; ");
 };
 
 $.global.WORD_IMPORT_CEP.getRepoRoot = function () {
-  // Most reliable: user env var set by installer.
+  // Preferred: extension is self-contained — runtime files live in host/repo/.
+  var bundled = $.global.WORD_IMPORT_CEP._getBundledRepoRoot();
+  if (bundled) return bundled;
+
+  // Legacy / dev fallbacks below — kept so old installs and in-repo dev still work
+  // even before the user re-runs install_cep.ps1 against this version.
   try {
     var envPath = $.getenv("WORD_IMPORT_REPO_PATH");
     envPath = $.global.WORD_IMPORT_CEP._sanitizePathText(envPath);
     if (envPath) {
       var envFolder = new Folder(envPath);
-      if (envFolder.exists) return envFolder;
+      if (envFolder.exists) {
+        var envCore = new File(envFolder.fsName + "/import_to_photoshop.jsx");
+        if (envCore.exists) return envFolder;
+      }
     }
   } catch (_) {}
 
   var extRoot = new File($.fileName).parent.parent;
 
-  // Preferred: install script writes the real repo root here.
   try {
     var marker = new File(extRoot.fsName + "/host/repo_path.txt");
     if (marker.exists && marker.open("r")) {
@@ -381,16 +489,21 @@ $.global.WORD_IMPORT_CEP.getRepoRoot = function () {
       var p = $.global.WORD_IMPORT_CEP._sanitizePathText(raw);
       if (p) {
         var f = new Folder(p);
-        if (f.exists) return f;
+        if (f.exists) {
+          var legacyCore = new File(f.fsName + "/import_to_photoshop.jsx");
+          if (legacyCore.exists) return f;
+        }
       }
     }
   } catch (_) {}
 
-  // Dev fallback: if extension lives inside repo/cep-extension/...
   try {
     if (extRoot.parent && extRoot.parent.parent && extRoot.parent.parent.parent) {
       var fallback = extRoot.parent.parent.parent;
-      if (fallback && fallback.exists) return fallback;
+      if (fallback && fallback.exists) {
+        var fbCore = new File(fallback.fsName + "/import_to_photoshop.jsx");
+        if (fbCore.exists) return fallback;
+      }
     }
   } catch (_) {}
 
@@ -424,7 +537,7 @@ $.global.WORD_IMPORT_CEP.runRepoScript = function (fileName, repoRootHint) {
     }
 
     var repoRoot = $.global.WORD_IMPORT_CEP.getRepoRoot();
-    if (!repoRoot) return "ERR|无法定位项目目录（repo_path.txt 缺失或无效） | " + $.global.WORD_IMPORT_CEP.diagnoseRepoRoot();
+    if (!repoRoot) return "ERR|扩展运行时缺失，请重新运行 install_cep.ps1 后重启 Photoshop | " + $.global.WORD_IMPORT_CEP.diagnoseRepoRoot();
     var target = new File(repoRoot.fsName + "/" + fileName);
     if (!target.exists) return "ERR|脚本不存在: " + target.fsName;
 
@@ -881,9 +994,37 @@ $.global.WORD_IMPORT_CEP._screenToDocPoint = function (doc, probe) {
 
 $.global.WORD_IMPORT_CEP._getCalibrationFile = function (repoRootHint) {
   try {
-    var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
-    if (!repoRoot) return null;
-    return new File(repoRoot.fsName + "/cursor_calibration.json");
+    var udr = $.global.WORD_IMPORT_CEP.getUserDataRoot();
+    if (udr) {
+      var pref = new File(udr.fsName + "/cursor_calibration.json");
+      if (pref.exists) return pref;
+      // First-run migration: copy from legacy repoRoot if available.
+      try {
+        var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
+        if (repoRoot) {
+          var legacy = new File(repoRoot.fsName + "/cursor_calibration.json");
+          if (legacy.exists && legacy.fsName !== pref.fsName) {
+            try {
+              legacy.encoding = "UTF-8";
+              if (legacy.open("r")) {
+                var raw = "";
+                try { raw = legacy.read(); } finally { legacy.close(); }
+                if (raw) {
+                  pref.encoding = "UTF-8";
+                  if (pref.open("w")) {
+                    try { pref.write(raw); } finally { pref.close(); }
+                  }
+                }
+              }
+            } catch (__) {}
+          }
+        }
+      } catch (__) {}
+      return pref;
+    }
+    var repoRoot2 = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
+    if (!repoRoot2) return null;
+    return new File(repoRoot2.fsName + "/cursor_calibration.json");
   } catch (_) {
     return null;
   }
@@ -951,7 +1092,7 @@ $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint = function (repoRootHint) {
 
 $.global.WORD_IMPORT_CEP._loadCoreApi = function (repoRootHint) {
   var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
-  if (!repoRoot) throw new Error("无法定位项目目录");
+  if (!repoRoot) throw new Error("扩展运行时缺失，请重新运行 install_cep.ps1 后重启 Photoshop");
   var coreFile = new File(repoRoot.fsName + "/import_to_photoshop.jsx");
   if (!coreFile.exists) throw new Error("找不到导入核心: " + coreFile.fsName);
   // 避免二次会话中残留不完整 API（部分 PS/CEP 组合下 eval 未覆盖全局）
@@ -1028,7 +1169,7 @@ $.global.WORD_IMPORT_CEP.exportDocxToJsxdata = function (docxPath, outPath, repo
   var runner = null;
   try {
     var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
-    if (!repoRoot) return "ERR|无法定位项目目录";
+    if (!repoRoot) return "ERR|扩展运行时缺失，请重新运行 install_cep.ps1 后重启 Photoshop";
 
     var scriptFile = new File(repoRoot.fsName + "/export_docx_styles.ps1");
     if (!scriptFile.exists) return "ERR|找不到导出脚本: " + scriptFile.fsName;
@@ -1170,7 +1311,7 @@ $.global.WORD_IMPORT_CEP.bindBubbleBoxesFile = function (repoRootHint) {
 $.global.WORD_IMPORT_CEP.generateBubbleBoxesFile = function (repoRootHint) {
   try {
     var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
-    if (!repoRoot) return "ERR|无法定位项目目录";
+    if (!repoRoot) return "ERR|扩展运行时缺失，请重新运行 install_cep.ps1 后重启 Photoshop";
     var scriptFile = new File(repoRoot.fsName + "/tools/extract_bubbles.py");
     if (!scriptFile.exists) return "ERR|找不到脚本: " + scriptFile.fsName;
 
@@ -1286,7 +1427,7 @@ $.global.WORD_IMPORT_CEP.generateBubbleBoxesFile = function (repoRootHint) {
 $.global.WORD_IMPORT_CEP.generateBubbleMasks = function (repoRootHint) {
   try {
     var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
-    if (!repoRoot) return "ERR|无法定位项目目录";
+    if (!repoRoot) return "ERR|扩展运行时缺失，请重新运行 install_cep.ps1 后重启 Photoshop";
     var launcherPs1 = new File(repoRoot.fsName + "/tools/launch_mask_gen_visible.ps1");
     if (!launcherPs1.exists) return "ERR|找不到启动脚本: " + launcherPs1.fsName;
 
