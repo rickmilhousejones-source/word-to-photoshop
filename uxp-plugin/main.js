@@ -282,7 +282,7 @@ function styleDescriptorForRange(r, fontPS) {
   return {
     _obj: "textStyle",
     fontPostScriptName: fontPS,
-    fauxBold: !!(r.bold && state.settings.useFauxBoldFallback),
+    fauxBold: false,
     fauxItalic: !!(r.italic && state.settings.useFauxItalic),
     syntheticItalic: !!(r.italic && state.settings.useFauxItalic),
     size: { _unit: "pointsUnit", _value: Number(state.settings.fontSizePt) },

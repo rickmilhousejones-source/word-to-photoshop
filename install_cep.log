@@ -1,12 +1,12 @@
 ﻿**********************
 Windows PowerShell transcript start
-Start time: 20260505133256
+Start time: 20260505203934
 Username: DESKTOP-5S1EKM0\Bone
 RunAs User: DESKTOP-5S1EKM0\Bone
 Configuration Name: 
 Machine: DESKTOP-5S1EKM0 (Microsoft Windows NT 10.0.22621.0)
 Host Application: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\install_cep.ps1 -NoPause
-Process ID: 11308
+Process ID: 18232
 PSVersion: 5.1.22621.3880
 PSEdition: Desktop
 PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.22621.3880
@@ -16,6 +16,9 @@ WSManStackVersion: 3.0
 PSRemotingProtocolVersion: 2.3
 SerializationVersion: 1.1.0.1
 **********************
+[INFO] Embedded Python (AppData, idempotent; may download on first run)...
+[INFO] Optional: Python fonttools (bundled tools/ copied into extension)...
+[OK] fonttools already available (C:\Users\whhai\AppData\Roaming\com.word_to_photoshop\python-embed-3.12\python.exe)
 [INFO] Installing CEP extension: com.word_to_photoshop.panel
 [INFO] Copying extension files to: C:\Users\whhai\AppData\Roaming\Adobe\CEP\extensions\com.word_to_photoshop.panel
 [OK]   Extension files copied to: C:\Users\whhai\AppData\Roaming\Adobe\CEP\extensions\com.word_to_photoshop.panel
@@ -54,7 +57,9 @@ Next: restart Photoshop.
   PS CC 2018: Window > Extensions > Word Import CEP (menu label may differ by language).
   PS 2020+: often Window > Extensions (Legacy) > Word Import CEP
   After install you can move or delete the source folder; the extension is self-contained.
+  Optional (weak faux-bold / need stable bold): see repo doc:
+    C:\Users\whhai\Documents\GitHub\word-to-photoshop\docs\optional_derived_bold_font.md
 **********************
 Windows PowerShell transcript end
-End time: 20260505133257
+End time: 20260505203934
 **********************

@@ -236,7 +236,7 @@ On first launch, the file is initialized from the bundled settings.default.json
       minHorizontalGap: 16,
       useArtboardBounds: true,
       wrapToNextColumn: true,
-      useFauxBoldFallback: true,
+      useFauxBoldFallback: false,
       useFauxItalic: true,
       bubblePaddingPx: 18,
       bubbleDetectMinArea: 18000,
@@ -250,7 +250,9 @@ On first launch, the file is initialized from the bundled settings.default.json
       lastDataFile: "",
       textColorRgb: [34, 34, 34],
       bubbleTextAlign: "center",
-      useParagraphLeadingActionManager: false
+      useParagraphLeadingActionManager: false,
+      fontDerivedBoldCandidates: [],
+      fontHasRealBold: true
     };
 
     if (!f.exists) {
@@ -269,7 +271,10 @@ On first launch, the file is initialized from the bundled settings.default.json
       throw new Error("settings.json 解析失败: " + e.message);
     }
 
-    return mergeObjects(defaults, parsed || {});
+    var merged = mergeObjects(defaults, parsed || {});
+    merged.useFauxBoldFallback = false;
+    if (merged.fontHasRealBold === false) merged.fontHasRealBold = true;
+    return merged;
   }
 
   function mergeObjects(base, override) {
@@ -1129,7 +1134,8 @@ On first launch, the file is initialized from the bundled settings.default.json
     return (
       listHas(cfg && cfg.fontRegularCandidates) ||
       listHas(cfg && cfg.fontFamilyNames) ||
-      listHas(cfg && cfg.fontBoldCandidates)
+      listHas(cfg && cfg.fontBoldCandidates) ||
+      listHas(cfg && cfg.fontDerivedBoldCandidates)
     );
   }
 
@@ -1233,12 +1239,38 @@ On first launch, the file is initialized from the bundled settings.default.json
     return null;
   }
 
+  function buildMergedBoldPostScriptCandidates(cfg) {
+    var out = [];
+    function pushUniqueToken(token) {
+      var t = token != null ? String(token).replace(/^\s+|\s+$/g, "") : "";
+      if (!t) return;
+      var low = t.toLowerCase();
+      var j;
+      for (j = 0; j < out.length; j++) {
+        if (String(out[j]).toLowerCase() === low) return;
+      }
+      out.push(t);
+    }
+    try {
+      var d = cfg && cfg.fontDerivedBoldCandidates ? cfg.fontDerivedBoldCandidates : [];
+      var di;
+      for (di = 0; di < d.length; di++) pushUniqueToken(d[di]);
+    } catch (_) {}
+    try {
+      var bb = cfg && cfg.fontBoldCandidates ? cfg.fontBoldCandidates : [];
+      var bi;
+      for (bi = 0; bi < bb.length; bi++) pushUniqueToken(bb[bi]);
+    } catch (_) {}
+    return out;
+  }
+
   function resolveFonts(cfg, textLayer) {
     var regular = null;
     var bold = null;
 
     regular = findFirstExistingPostScript(cfg.fontRegularCandidates);
-    bold = findFirstExistingPostScript(cfg.fontBoldCandidates);
+    var boldMerged = buildMergedBoldPostScriptCandidates(cfg);
+    bold = findFirstExistingPostScript(boldMerged.length ? boldMerged : cfg.fontBoldCandidates);
 
     if (!regular) regular = findFirstMatchingFamily(cfg.fontFamilyNames, ["Regular", "常规"]);
     if (!bold) bold = findFirstMatchingFamily(cfg.fontFamilyNames, ["Bold", "粗体"]);
@@ -1304,26 +1336,31 @@ On first launch, the file is initialized from the bundled settings.default.json
       regular: regular,
       bold: bold,
       hasRealBold: hasRealBold,
-      fauxBoldFallbackActive: !hasRealBold && !!(cfg && cfg.useFauxBoldFallback)
+      fauxBoldFallbackActive: false
     };
     try { $.global.WORD_IMPORT_LAST_FONT_RESOLVE = out; } catch (_) {}
     // #region agent log
     try {
       var crRaw = cfg && cfg.fontRegularCandidates ? cfg.fontRegularCandidates : [];
       var cbRaw = cfg && cfg.fontBoldCandidates ? cfg.fontBoldCandidates : [];
+      var cdRaw = cfg && cfg.fontDerivedBoldCandidates ? cfg.fontDerivedBoldCandidates : [];
       var cr = crRaw instanceof Array ? crRaw : (crRaw ? [crRaw] : []);
       var cb = cbRaw instanceof Array ? cbRaw : (cbRaw ? [cbRaw] : []);
+      var cd = cdRaw instanceof Array ? cdRaw : (cdRaw ? [cdRaw] : []);
       var prevR = [];
       var prevB = [];
+      var prevD = [];
       var pi;
       for (pi = 0; pi < Math.min(6, cr.length); pi++) prevR.push(String(cr[pi]));
       for (pi = 0; pi < Math.min(6, cb.length); pi++) prevB.push(String(cb[pi]));
+      for (pi = 0; pi < Math.min(6, cd.length); pi++) prevD.push(String(cd[pi]));
       agentDbgLog(
         "import_to_photoshop.jsx:resolveFonts",
         "resolved",
         {
           candRegularPreview: prevR,
           candBoldPreview: prevB,
+          candDerivedBoldPreview: prevD,
           resolvedRegularPs: regular && regular.postScriptName ? String(regular.postScriptName) : "",
           resolvedBoldPs: bold && bold.postScriptName ? String(bold.postScriptName) : "",
           hasRealBold: hasRealBold
@@ -2142,16 +2179,12 @@ On first launch, the file is initialized from the bundled settings.default.json
   function makeStyleRange(from, to, isBold, isItalic, font, cfg) {
     var separateBoldFace = !!(font.bold && font.regular && font.bold.postScriptName !== font.regular.postScriptName);
     var useBoldFont = !!(isBold && separateBoldFace);
-    // settings「无（仿加粗）」会存 fontHasRealBold:false；若仍用 resolveFonts 解析出的独立粗体面，会抑制 fauxBold。
-    if (cfg && cfg.fontHasRealBold === false) {
-      useBoldFont = false;
-    }
     return {
       from: from,
       to: to,
       style: {
         fontPostScriptName: useBoldFont ? font.bold.postScriptName : font.regular.postScriptName,
-        fauxBold: !!(!useBoldFont && isBold && cfg && cfg.useFauxBoldFallback),
+        fauxBold: false,
         fauxItalic: !!(isItalic && cfg && cfg.useFauxItalic),
         syntheticItalic: !!(isItalic && cfg && cfg.useFauxItalic)
       }
@@ -2338,6 +2371,14 @@ On first launch, the file is initialized from the bundled settings.default.json
     } catch (_) {}
   }
 
+  /**
+   * AM setd 会按 textKey 整层重建字符属性；若在 textStyle 里未成功写入 horizontalScale，会冲掉 fast path 里设的 DOM 值。
+   * 仅「整段单一 styleRange」可安全用 DOM horizontalScale（混排多区间会误伤非仿粗部分，仍依赖 AM）。
+   */
+  function tryApplyDomFauxBoldHorizontalScaleAfterAm(textLayer, styleRanges, cfg) {
+    return;
+  }
+
   function applyTextWithStyleRanges(textLayer, fullText, styleRanges, cfg, paraHints) {
     try {
       textLayer.textItem.size = cfg.fontSizePt != null ? cfg.fontSizePt : 26;
@@ -2436,6 +2477,9 @@ On first launch, the file is initialized from the bundled settings.default.json
       try {
         syncTextLayerDomFauxFromRanges(textLayer, styleRanges);
       } catch (_) {}
+      try {
+        tryApplyDomFauxBoldHorizontalScaleAfterAm(textLayer, styleRanges, cfg);
+      } catch (_) {}
     } catch (eAm) {
       // #region agent log
       agentDbgLog(
@@ -2510,6 +2554,9 @@ On first launch, the file is initialized from the bundled settings.default.json
       } catch (_) {}
       try {
         syncTextLayerDomFauxFromRanges(textLayer, styleRanges);
+      } catch (_) {}
+      try {
+        tryApplyDomFauxBoldHorizontalScaleAfterAm(textLayer, styleRanges, cfg);
       } catch (_) {}
     }
   }
@@ -2637,6 +2684,10 @@ On first launch, the file is initialized from the bundled settings.default.json
       textDesc.putList(stringIDToTypeID("paragraphStyleRange"), paraList);
       tryPutTextKeyRootMojikumiExperiments(textDesc);
     } catch (_) {}
+  }
+
+  function tryPutFauxBoldHorizontalScaleAm(desc, style, cfg) {
+    return;
   }
 
   function fillStyleDescriptor(desc, style, cfg) {

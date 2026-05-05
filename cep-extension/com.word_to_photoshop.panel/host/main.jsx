@@ -613,6 +613,34 @@ $.global.WORD_IMPORT_CEP._quoteForCmd = function (s) {
   return "\"" + v.replace(/"/g, "\"\"") + "\"";
 };
 
+/** Visible .cmd preamble so the console is not blank while Python runs (app.system is synchronous). */
+$.global.WORD_IMPORT_CEP._synthRunnerCmdPreamble = function (cmdTitle) {
+  var t = String(cmdTitle || "WTP").replace(/[\r\n]+/g, " ");
+  return (
+    "@echo off\r\n" +
+    "chcp 65001 >nul 2>&1\r\n" +
+    "title " +
+    t +
+    "\r\n" +
+    "echo ============================================================\r\n" +
+    "echo  Loading... Please do NOT exit or close this window.\r\n" +
+    "echo  WTP is running Python; exiting now may abort the job.\r\n" +
+    "echo  Output is logged to a file; this may take up to a few minutes.\r\n" +
+    "echo ============================================================\r\n" +
+    "echo.\r\n"
+  );
+};
+
+/** Photoshop often hides child consoles; START opens a visible window that runs the batch. */
+$.global.WORD_IMPORT_CEP._synthRunnerInvokeCmd = function (runnerFsPath) {
+  var p = String(runnerFsPath || "");
+  if (!p) return "";
+  return (
+    "cmd.exe /d/c start \"WTP Loading (do not close)\" /wait cmd.exe /d/c " +
+    $.global.WORD_IMPORT_CEP._quoteForCmd(p)
+  );
+};
+
 /** Double-quotes a path for a .bat/.cmd line (internal " → ""). */
 $.global.WORD_IMPORT_CEP._quoteForBatLine = function (s) {
   var v = String(s == null ? "" : s);
@@ -1523,6 +1551,125 @@ $.global.WORD_IMPORT_CEP.generateBubbleBoxesFile = function (repoRootHint) {
       visualizationDir: generatedMeta && generatedMeta.visualizationDir ? String(generatedMeta.visualizationDir) : "",
       generatedFiles: generatedMeta && generatedMeta.files ? generatedMeta.files : []
     });
+  } catch (e) {
+    return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
+  }
+};
+
+/**
+ * 内置合成粗体：调用 tools/generate_synthetic_bold_font.py（仅依赖 pip fonttools），生成真实 .ttf 文件。
+ */
+$.global.WORD_IMPORT_CEP.generateSyntheticBoldTtf = function (repoRootHint) {
+  try {
+    var repoRoot = $.global.WORD_IMPORT_CEP._resolveRepoRootWithHint(repoRootHint);
+    if (!repoRoot) return "ERR|扩展运行时缺失，请重新运行 install_cep.ps1 后重启 Photoshop";
+    var scriptFile = new File(repoRoot.fsName + "/tools/generate_synthetic_bold_font.py");
+    if (!scriptFile.exists) return "ERR|找不到脚本: " + scriptFile.fsName;
+
+    var src = File.openDialog("选择 Regular 字体（需含 TrueType 轮廓 / glyf）", "*.ttf;*.ttc;*.otf");
+    if (!src) return "ERR|已取消";
+    if (!src.exists) return "ERR|文件不存在";
+
+    var baseLeaf = String(src.name || "Font");
+    var dot = baseLeaf.lastIndexOf(".");
+    if (dot >= 0) baseLeaf = baseLeaf.substring(0, dot);
+    var parentFs = src.parent ? String(src.parent.fsName) : "";
+    if (!parentFs) return "ERR|无法确定源字体所在目录";
+    var outFs = parentFs + "/" + baseLeaf + "-SynthBold.ttf";
+    var dstTry = new File(outFs);
+    if (dstTry.exists) {
+      outFs = parentFs + "/" + baseLeaf + "-SynthBold-" + String(new Date().getTime()) + ".ttf";
+    }
+    var dstFile = new File(outFs);
+
+    var tempDir = Folder.temp;
+    var runId = String(new Date().getTime());
+    var logFile = new File(tempDir.fsName + "/word_import_synth_bold_" + runId + ".log");
+
+    var scriptArgs =
+      $.global.WORD_IMPORT_CEP._quoteForCmd(scriptFile.fsName) +
+      " --input " +
+      $.global.WORD_IMPORT_CEP._quoteForCmd(src.fsName) +
+      " --output " +
+      $.global.WORD_IMPORT_CEP._quoteForCmd(dstFile.fsName) +
+      " --shift-em 0.028";
+
+    var launchers = [];
+    try {
+      var ad = $.getenv("APPDATA");
+      if (ad) {
+        var embPy = new File(ad + "/com.word_to_photoshop/python-embed-3.12/python.exe");
+        if (embPy.exists) launchers.push($.global.WORD_IMPORT_CEP._quoteForCmd(embPy.fsName));
+      }
+    } catch (_) {}
+    launchers.push("py -3", "py", "python", "python3");
+    var output = "";
+    var usedLauncher = "";
+    var li;
+    for (li = 0; li < launchers.length; li++) {
+      var launcher = launchers[li];
+      var safeLauncher = String(launcher).replace(/[^a-zA-Z0-9]+/g, "_");
+      var runner = new File(tempDir.fsName + "/word_import_synth_bold_" + safeLauncher + "_" + runId + ".cmd");
+      runner.encoding = "UTF-8";
+      if (!runner.open("w")) {
+        output += "[" + launcher + "] open_runner_failed ";
+        continue;
+      }
+      try {
+        runner.write($.global.WORD_IMPORT_CEP._synthRunnerCmdPreamble("WTP build SynthBold TTF"));
+        runner.write(launcher + " " + scriptArgs + " > " + $.global.WORD_IMPORT_CEP._quoteForCmd(logFile.fsName) + " 2>&1\r\n");
+        runner.write("exit /b %errorlevel%\r\n");
+      } finally {
+        runner.close();
+      }
+      var cmd = $.global.WORD_IMPORT_CEP._synthRunnerInvokeCmd(runner.fsName);
+      var one = app.system(cmd);
+      output += "[" + launcher + "] " + String(one || "") + " ";
+      try {
+        runner.remove();
+      } catch (_) {}
+      if (dstFile.exists) {
+        usedLauncher = launcher;
+        break;
+      }
+    }
+
+    var logText = "";
+    try {
+      if (logFile.exists) {
+        logFile.encoding = "UTF-8";
+        if (logFile.open("r")) {
+          try {
+            logText = String(logFile.read() || "");
+          } finally {
+            logFile.close();
+          }
+        }
+      }
+    } catch (_) {}
+
+    var briefLog = logText ? logText.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "") : "";
+    if (briefLog.length > 320) briefLog = briefLog.slice(0, 320) + "...";
+
+    if (!dstFile.exists) {
+      return (
+        "ERR|生成失败，未写出文件。需本机 Python（建议 py launcher）且已 pip install fonttools；requirements 在扩展 host\\repo\\tools。返回: " +
+        String(output || "") +
+        (briefLog ? "；日志: " + briefLog : "") +
+        "；完整日志: " +
+        String(logFile.fsName)
+      );
+    }
+
+    return "OK|" +
+      $.global.WORD_IMPORT_CEP._encodeJSON({
+        inputPath: String(src.fsName),
+        outputPath: String(dstFile.fsName),
+        launcher: usedLauncher,
+        shellOutput: String(output || "").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, ""),
+        logHint: briefLog,
+        logPath: String(logFile.fsName)
+      });
   } catch (e) {
     return "ERR|" + e.message + " (line: " + (e.line || "?") + ")";
   }

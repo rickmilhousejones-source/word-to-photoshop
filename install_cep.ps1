@@ -45,6 +45,24 @@ try {
   $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
   $logFile = Join-Path $scriptDir "install_cep.log"
   try { Start-Transcript -Path $logFile -Force | Out-Null } catch {}
+  $bootstrapEmbed = Join-Path $scriptDir "tools\bootstrap_embed_python.ps1"
+  if (Test-Path -LiteralPath $bootstrapEmbed) {
+    Write-Info "Embedded Python (AppData, idempotent; may download on first run)..."
+    try {
+      & $bootstrapEmbed -RepoRoot $scriptDir
+    } catch {
+      Write-WarnMsg "Embedded Python bootstrap failed (non-fatal): $($_.Exception.Message)"
+    }
+  }
+  $fontgenInstaller = Join-Path $scriptDir "tools\install_fontgen_if_needed.ps1"
+  if (Test-Path -LiteralPath $fontgenInstaller) {
+    Write-Info "Optional: Python fonttools (bundled tools/ copied into extension)..."
+    try {
+      & $fontgenInstaller
+    } catch {
+      Write-WarnMsg "Fonttools helper failed (non-fatal): $($_.Exception.Message)"
+    }
+  }
   $extId = "com.word_to_photoshop.panel"
   $sourceDir = Join-Path $scriptDir "cep-extension\$extId"
   $destBases = @(
@@ -73,6 +91,10 @@ try {
   $repoDirs = @(
     @{ Src = "tools";                         Dst = "tools" }
   )
+  $envDepsSrc = Join-Path $scriptDir "environment_dependencies"
+  if (Test-Path -LiteralPath $envDepsSrc) {
+    $repoDirs += @{ Src = "environment_dependencies"; Dst = "environment_dependencies" }
+  }
   if (-not $NoFonts) {
     $repoDirs += @{ Src = "fonts";            Dst = "fonts" }
   }
@@ -187,6 +209,13 @@ try {
   Write-Host "  PS CC 2018: Window > Extensions > Word Import CEP (menu label may differ by language)."
   Write-Host "  PS 2020+: often Window > Extensions (Legacy) > Word Import CEP"
   Write-Host "  After install you can move or delete the source folder; the extension is self-contained."
+  try {
+    $derivedBoldDoc = Join-Path $PSScriptRoot "docs\optional_derived_bold_font.md"
+    if (Test-Path -LiteralPath $derivedBoldDoc) {
+      Write-Host "  Optional (weak faux-bold / need stable bold): see repo doc:"
+      Write-Host "    $derivedBoldDoc"
+    }
+  } catch {}
 } catch {
   Write-ErrMsg $_.Exception.Message
   try { Write-Host "Log file: $logFile" } catch {}

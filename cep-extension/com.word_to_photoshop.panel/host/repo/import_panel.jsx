@@ -178,6 +178,15 @@
     "提示：框宽、起始坐标、列间距等参数请在 settings.json 中调整（位置：%APPDATA%\\com.word_to_photoshop\\settings.json）。",
     { multiline: false }
   );
+  var cfgDerivedBoldHint = cfgPanel.add(
+    "statictext",
+    undefined,
+    "无官方粗体时可用「生成合成粗体 TTF」在同目录写出字体文件（需 Python）。安装后在「加粗字体」里选取即可；详见 docs/optional_derived_bold_font.md。",
+    { multiline: true }
+  );
+  try {
+    cfgDerivedBoldHint.preferredSize.width = 460;
+  } catch (_) {}
 
   var rowFontSelect = cfgPanel.add("group");
   rowFontSelect.orientation = "column";
@@ -193,8 +202,16 @@
   rowBold.spacing = 8;
   rowBold.add("statictext", undefined, "加粗字体");
   var btnPickBoldFont = rowBold.add("button", undefined, "选择…");
-  btnPickBoldFont.helpTip = "在列表中选取加粗字体；首项为无（仿加粗）";
+  btnPickBoldFont.helpTip =
+    "在列表中选取真实加粗字重（或合成粗体 TTF）。若使用下方生成的 XXX-SynthBold.ttf，请先安装该字体再刷新列表后在此选择。";
   var txtBoldPicked = rowBold.add("statictext", undefined, "");
+
+  var rowSynthBold = rowFontSelect.add("group");
+  rowSynthBold.spacing = 8;
+  rowSynthBold.add("statictext", undefined, "合成粗体");
+  var btnGenerateSynthBold = rowSynthBold.add("button", undefined, "生成 TTF…");
+  btnGenerateSynthBold.helpTip =
+    "选择源字体后，在同一窗口调节加粗幅度与预览文字，点「确定」刷新 PNG 对比（源字 / 仿粗近似 / 合成），满意后点「生成」写出「原名-SynthBold.ttf」。首次若未装 Python，将从 host/repo/environment_dependencies 离线安装内置版（见该目录 README）。";
 
   var rowFontImport = cfgPanel.add("group");
   rowFontImport.spacing = 8;
@@ -231,6 +248,7 @@
   setButtonSize(btnRestoreDefaultFont, 200, 28);
   setButtonSize(btnPickRegularFont, 88, 28);
   setButtonSize(btnPickBoldFont, 88, 28);
+  setButtonSize(btnGenerateSynthBold, 112, 28);
   setButtonSize(btnImportCurrent, 188, 34);
   setButtonSize(btnImportAll, 146, 34);
   setButtonSize(btnClearLog, 92, 28);
@@ -380,7 +398,8 @@
   }
   /**
    * 仅从 Photoshop 内置字体枚举读取（不扫 Windows 目录）。
-   * 优先 app.textFonts；若为空则回退 app.fonts（部分版本/环境下 textFonts 始终为空但 fonts 可用）。
+   * 合并 app.textFonts 与 app.fonts（去重 PostScript 名）：新装字体常先出现在其一而另一份缓存较旧，
+   * 若仅用 textFonts 会在「刷新列表」后仍缺字，直至重启 PS。
    * 每条字体单独 try/catch，避免单个损坏条目拖垮整表。
    */
   function collectInstalledFontsMappedFromProjectFonts() {
@@ -431,11 +450,9 @@
     try {
       enumerateCollection(app.textFonts);
     } catch (_) {}
-    if (!out.length) {
-      try {
-        enumerateCollection(app.fonts);
-      } catch (_) {}
-    }
+    try {
+      enumerateCollection(app.fonts);
+    } catch (_) {}
     out.sort(function (a, b) {
       var fa = String(a.family || "").toLowerCase();
       var fb = String(b.family || "").toLowerCase();
@@ -449,23 +466,77 @@
     });
     return out;
   }
-  function pickAutoBoldForRegular(regularEntry) {
-    if (!regularEntry) return null;
-    var family = String(regularEntry.family || "").toLowerCase();
-    var src = String(regularEntry.sourceFile || "").toLowerCase();
-    for (var i = 0; i < fontUiState.allEntries.length; i++) {
-      var b = fontUiState.allEntries[i];
-      if (String(b.family || "").toLowerCase() !== family) continue;
-      if (isBoldStyleName(b.style)) return b;
-    }
-    for (var j = 0; j < fontUiState.allEntries.length; j++) {
-      var b2 = fontUiState.allEntries[j];
-      if (String(b2.sourceFile || "").toLowerCase() !== src) continue;
-      if (isBoldStyleName(b2.style)) return b2;
-    }
-    return null;
+
+  function regularPostScriptStem(ps) {
+    var s = String(ps || "").replace(/^\s+|\s+$/g, "");
+    if (!s) return "";
+    var m = s.match(/^(.+?)[-_](Regular|Roman|Light|Book|Normal|Std-Roman)(?:[-_]|$)/i);
+    if (m && m[1]) return m[1].replace(/-+$/, "");
+    m = s.match(/^(.+)[-_](?:Regular|Roman|Light|Book|Normal)$/i);
+    if (m && m[1]) return m[1];
+    return s;
   }
-  /** dialogOpts.pinnedCount：列表前若干项不参与搜索筛选（加粗对话框首项「无（仿加粗）」固定置顶）。 */
+
+  function boldHeuristicMatch(regularEntry, cand) {
+    var regPs = String(regularEntry.postScriptName || "")
+      .toLowerCase()
+      .replace(/^\s+|\s+$/g, "");
+    var eps = String(cand.postScriptName || "")
+      .toLowerCase()
+      .replace(/^\s+|\s+$/g, "");
+    if (!eps || eps === regPs) return false;
+    var famR = String(regularEntry.family || "").toLowerCase();
+    var famC = String(cand.family || "").toLowerCase();
+    if (famR && famR === famC && isBoldStyleName(cand.style)) return true;
+    var stem = regularPostScriptStem(regularEntry.postScriptName).toLowerCase();
+    if (stem && eps.indexOf(stem) === 0) {
+      if (isBoldStyleName(cand.style)) return true;
+      if (/(^|-|_)(bold|bd|black|heavy|w[6-9]|w[1-9][0-9])(-|_|$)/i.test(eps)) return true;
+    }
+    return false;
+  }
+
+  function rankBoldCandidate(entry, regularEntry) {
+    var sameFam =
+      String(entry.family || "").toLowerCase() === String(regularEntry.family || "").toLowerCase();
+    var s = (String(entry.style || "") + " " + String(entry.postScriptName || "")).toLowerCase();
+    var w = 40;
+    if (/medium|mediumitalic/.test(s)) w = 22;
+    if (/semibold|demibold|\b600\b/.test(s)) w = 14;
+    if (/(^|\s)bold(\s|$)|-bold|-bd\b|bolditalic/.test(s)) w = 8;
+    if (/black|heavy|extrabold|\b900\b|blackitalic/.test(s)) w = 28;
+    if (/light|thin|\b100\b|\b200\b/.test(s)) w = 36;
+    return (sameFam ? 0 : 80) + w;
+  }
+
+  function collectBoldCandidatesForRegular(regularEntry) {
+    var out = [];
+    if (!regularEntry || !fontUiState.allEntries || !fontUiState.allEntries.length) return out;
+    var seen = {};
+    var i;
+    for (i = 0; i < fontUiState.allEntries.length; i++) {
+      var e = fontUiState.allEntries[i];
+      if (!boldHeuristicMatch(regularEntry, e)) continue;
+      var k = String(e.postScriptName || "").toLowerCase();
+      if (seen[k]) continue;
+      seen[k] = true;
+      out.push(e);
+    }
+    out.sort(function (a, b) {
+      var ra = rankBoldCandidate(a, regularEntry);
+      var rb = rankBoldCandidate(b, regularEntry);
+      if (ra !== rb) return ra - rb;
+      return String(a.postScriptName || "").localeCompare(String(b.postScriptName || ""));
+    });
+    return out;
+  }
+
+  function pickAutoBoldForRegular(regularEntry) {
+    var list = collectBoldCandidatesForRegular(regularEntry);
+    return list.length ? list[0] : null;
+  }
+
+  /** dialogOpts.pinnedCount：列表前若干项不参与搜索筛选（固定置顶项）。 */
   function showListPickDialog(title, optionLabels, initialIndex, dialogOpts) {
     dialogOpts = dialogOpts || {};
     var pinnedCount = Math.max(0, Math.floor(Number(dialogOpts.pinnedCount) || 0));
@@ -673,7 +744,7 @@
       if (!cfg.fontBoldCandidates.length) {
         cfg.fontBoldCandidates = mergeFontCandidates([], [], DEFAULT_FONT_BOLD_FALLBACK);
       }
-      cfg.fontHasRealBold = false;
+      cfg.fontHasRealBold = true;
     }
     // #region agent log
     agentDbgLog("import_panel.jsx:applyRegularFontFromEntry", "applied", { postScriptName: picked.postScriptName, autoBoldPs: autoBold ? autoBold.postScriptName : "", fontHasRealBold: cfg.fontHasRealBold }, "H_direct_apply");
@@ -694,6 +765,7 @@
     cfg.fontFamilyNames = mergeFontCandidates(DEFAULT_FONT_FAMILY_FALLBACK, [], []);
     cfg.fontBoldCandidates = mergeFontCandidates([], [], DEFAULT_FONT_BOLD_FALLBACK);
     cfg.fontHasRealBold = true;
+    cfg.fontDerivedBoldCandidates = [];
     cfg.fontSourceFile = "";
     try {
       readCfgInputs();
@@ -708,40 +780,46 @@
     }
   }
 
+  function applyBoldFontFromResolvedEntry(picked) {
+    if (!picked || !state || !state.cfg) return;
+    var pickedBoldPs = String(decodeMaybeURIComponent(picked.postScriptName || "")).replace(/^\s+|\s+$/g, "");
+    if (!pickedBoldPs || !isPostScriptInTextFonts(pickedBoldPs)) {
+      log("拒绝保存加粗字体：未在 Photoshop 枚举（textFonts / fonts）中命中 (postScriptName=\"" + pickedBoldPs + "\")。");
+      try {
+        alert("该加粗字体未被 Photoshop 识别（textFonts / fonts 均未命中），无法保存。");
+      } catch (_) {}
+      try {
+        agentDbgLog(
+          "import_panel.jsx:applyBoldFontFromResolvedEntry",
+          "rejected_unknown_ps",
+          { pickedPs: pickedBoldPs },
+          "H_strictPick"
+        );
+      } catch (_) {}
+      return;
+    }
+    var cfg = state.cfg;
+    var expB = buildExplicitFontCandidates(picked);
+    cfg.fontBoldCandidates = expB.length ? mergeFontCandidates(expB, [], []) : mergeFontCandidates([], [], DEFAULT_FONT_BOLD_FALLBACK);
+    var regPs2 = cfg.fontRegularCandidates && cfg.fontRegularCandidates.length ? cfg.fontRegularCandidates[0] : "";
+    cfg.fontHasRealBold = pickedBoldPs.toLowerCase() !== String(regPs2 || "").toLowerCase();
+    cfg.fontDerivedBoldCandidates = [];
+    try {
+      agentDbgLog(
+        "import_panel.jsx:applyBoldFontFromResolvedEntry",
+        "applied",
+        { bold0: (cfg.fontBoldCandidates && cfg.fontBoldCandidates[0]) || "", fontHasRealBold: cfg.fontHasRealBold },
+        "H_direct_apply"
+      );
+    } catch (_) {}
+    persistFontSelectionNow();
+  }
+
   function applyBoldFontFromDialogIndex(listIndex) {
     if (!state || !state.cfg) return;
-    var cfg = state.cfg;
-    if (Number(listIndex) === 0) {
-      cfg.fontBoldCandidates = [];
-      var cr0 = cfg.fontRegularCandidates || [];
-      var cj;
-      for (cj = 0; cj < cr0.length; cj++) cfg.fontBoldCandidates.push(cr0[cj]);
-      if (!cfg.fontBoldCandidates.length) {
-        cfg.fontBoldCandidates = mergeFontCandidates([], [], DEFAULT_FONT_BOLD_FALLBACK);
-      }
-      cfg.fontHasRealBold = false;
-    } else {
-      var idx = Number(listIndex) - 1;
-      var picked = fontUiState.allEntries[idx];
-      if (!picked) return;
-      var pickedBoldPs = String(decodeMaybeURIComponent(picked.postScriptName || "")).replace(/^\s+|\s+$/g, "");
-      if (!pickedBoldPs || !isPostScriptInTextFonts(pickedBoldPs)) {
-        log("拒绝保存加粗字体：未在 Photoshop 枚举（textFonts / fonts）中命中 (postScriptName=\"" + pickedBoldPs + "\")。");
-        try { alert("该加粗字体未被 Photoshop 识别（textFonts / fonts 均未命中），无法保存。"); } catch (_) {}
-        // #region agent log
-        try { agentDbgLog("import_panel.jsx:applyBoldFontFromDialogIndex", "rejected_unknown_ps", { pickedPs: pickedBoldPs, family: picked.family, uiName: picked.uiName }, "H_strictPick"); } catch (_) {}
-        // #endregion
-        return;
-      }
-      var expB = buildExplicitFontCandidates(picked);
-      cfg.fontBoldCandidates = expB.length ? mergeFontCandidates(expB, [], []) : mergeFontCandidates([], [], DEFAULT_FONT_BOLD_FALLBACK);
-      var regPs2 = cfg.fontRegularCandidates && cfg.fontRegularCandidates.length ? cfg.fontRegularCandidates[0] : "";
-      cfg.fontHasRealBold = pickedBoldPs.toLowerCase() !== String(regPs2 || "").toLowerCase();
-    }
-    // #region agent log
-    agentDbgLog("import_panel.jsx:applyBoldFontFromDialogIndex", "applied", { listIndex: listIndex, bold0: (cfg.fontBoldCandidates && cfg.fontBoldCandidates[0]) || "", fontHasRealBold: cfg.fontHasRealBold }, "H_direct_apply");
-    // #endregion
-    persistFontSelectionNow();
+    var picked = fontUiState.allEntries[listIndex];
+    if (!picked) return;
+    applyBoldFontFromResolvedEntry(picked);
   }
   function openRegularFontPicker() {
     if (!fontUiState.allEntries || !fontUiState.allEntries.length) {
@@ -773,29 +851,28 @@
       alert("请先在「刷新系统字体列表」后再选择字体。");
       return;
     }
-    var labels = ["无（仿加粗）"];
+    var labels = [];
     var a;
     for (a = 0; a < fontUiState.allEntries.length; a++) labels.push(fontLabel(fontUiState.allEntries[a]));
     var cfg = state.cfg || {};
     var startIdx = 0;
-    if (cfg.fontHasRealBold === false) {
-      startIdx = 0;
-    } else if (cfg.fontBoldCandidates && cfg.fontBoldCandidates.length) {
+    if (cfg.fontBoldCandidates && cfg.fontBoldCandidates.length) {
       var bps = String(cfg.fontBoldCandidates[0]);
       for (var bi = 0; bi < fontUiState.allEntries.length; bi++) {
         if (String(fontUiState.allEntries[bi].postScriptName || "").toLowerCase() === bps.toLowerCase()) {
-          startIdx = bi + 1;
+          startIdx = bi;
           break;
         }
       }
     }
-    var ix = showListPickDialog("选择加粗字体", labels, startIdx, { pinnedCount: 1 });
+    var ix = showListPickDialog("选择加粗字体", labels, startIdx, { pinnedCount: 0 });
     // #region agent log
     agentDbgLog("import_panel.jsx:openBoldFontPicker", "dialog closed", { ix: ix, startIdx: startIdx }, "H_dialog");
     // #endregion
     if (ix < 0) return;
     applyBoldFontFromDialogIndex(ix);
   }
+
   function refreshFontDropdownsFromProject(cfg, reason) {
     try {
       var all = collectInstalledFontsMappedFromProjectFonts();
@@ -808,7 +885,7 @@
           "字体列表: app.textFonts 与 app.fonts 均未枚举到字体。请确认在 Photoshop 内运行脚本、已打开文档后再试，或重启 Photoshop。"
         );
       } else {
-        log("字体列表已刷新: total=" + all.length + "（来源：Photoshop 内置枚举 textFonts→fonts，严格模式）。");
+        log("字体列表已刷新: total=" + all.length + "（合并 textFonts + fonts，严格模式）。");
       }
       if (cfg) updateFontPickedLabels(cfg);
       // #region agent log
@@ -847,18 +924,14 @@
       var rPrefix = r0 && !rOk ? "当前(未识别): " : "当前: ";
       var bPrefix = b0 && !bOk ? "当前(未识别): " : "当前: ";
       txtRegularPicked.text = r0 ? (rPrefix + (rLabel || r0)) : "当前: (未设置)";
-      if (cfg && cfg.fontHasRealBold === false) {
-        txtBoldPicked.text = "当前: 无（仿加粗）";
-      } else {
-        txtBoldPicked.text = b0 ? (bPrefix + (bLabel || b0)) : "当前: (未设置)";
-      }
+      txtBoldPicked.text = b0 ? (bPrefix + (bLabel || b0)) : "当前: (未设置)";
       if (r0 && !rOk) {
         log("提示: 已保存的正文字体「" + r0 + "」在当前 PS 字体列表中未识别，请重新选择字体。");
         // #region agent log
         try { agentDbgLog("import_panel.jsx:updateFontPickedLabels", "stale_regular", { regular0: r0 }, "H_strictPick"); } catch (_) {}
         // #endregion
       }
-      if (b0 && !bOk && cfg && cfg.fontHasRealBold !== false) {
+      if (b0 && !bOk) {
         log("提示: 已保存的加粗字体「" + b0 + "」在当前 PS 字体列表中未识别，请重新选择字体。");
       }
     } catch (_) {}
@@ -1028,6 +1101,515 @@
     return true;
   }
 
+  function quoteCmdArg(p) {
+    var s = String(p || "");
+    if (/[\s"&^<>|]/.test(s)) return '"' + s.replace(/"/g, '\\"') + '"';
+    return s;
+  }
+
+  /** English lines so the visible cmd window is not blank while Python runs (app.system is synchronous). */
+  function synthRunnerCmdPreamble(cmdTitle) {
+    var t = String(cmdTitle || "WTP").replace(/[\r\n]+/g, " ");
+    return (
+      "@echo off\r\n" +
+      "chcp 65001 >nul 2>&1\r\n" +
+      "title " +
+      t +
+      "\r\n" +
+      "echo ============================================================\r\n" +
+      "echo  Loading... Please do NOT exit or close this window.\r\n" +
+      "echo  WTP is running Python; exiting now may abort the job.\r\n" +
+      "echo  Output is logged to a file; this may take up to a few minutes.\r\n" +
+      "echo ============================================================\r\n" +
+      "echo.\r\n"
+    );
+  }
+
+  /**
+   * Photoshop often launches cmd without a visible console; wrap so START opens a real window.
+   * Outer cmd /c exits after /wait; inner cmd runs the batch with echoes visible.
+   */
+  function synthRunnerInvokeCmd(runnerFsPath) {
+    var p = String(runnerFsPath || "");
+    if (!p) return "";
+    return (
+      "cmd.exe /d/c start \"WTP Loading (do not close)\" /wait cmd.exe /d/c " + quoteCmdArg(p)
+    );
+  }
+
+  function getSynthEmbedPythonFsName() {
+    try {
+      var ad = $.getenv("APPDATA");
+      if (!ad) return "";
+      return ad + "/com.word_to_photoshop/python-embed-3.12/python.exe";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function getSynthPythonLaunchers() {
+    var out = [];
+    try {
+      var ep = getSynthEmbedPythonFsName();
+      if (ep) {
+        var ef = new File(ep);
+        if (ef.exists) out.push(quoteCmdArg(ef.fsName));
+      }
+    } catch (_) {}
+    out.push("py -3");
+    out.push("py");
+    out.push("python");
+    out.push("python3");
+    return out;
+  }
+
+  function ensureEmbedPythonWithUi(repoHostFs) {
+    var emb = new File(getSynthEmbedPythonFsName());
+    if (emb.exists) return true;
+    var boot = new File(String(repoHostFs || "") + "/tools/bootstrap_embed_python.ps1");
+    if (!boot.exists) {
+      try {
+        alert("\u7f3a\u5c11: " + boot.fsName);
+      } catch (_) {}
+      return false;
+    }
+    var runId = String(new Date().getTime());
+    var progF = new File(Folder.temp.fsName + "/wtp_emb_prog_" + runId + ".txt");
+    var errF = new File(Folder.temp.fsName + "/wtp_emb_err_" + runId + ".txt");
+    try {
+      if (progF.exists) progF.remove();
+    } catch (_) {}
+    try {
+      if (errF.exists) errF.remove();
+    } catch (_) {}
+    var kick = new File(Folder.temp.fsName + "/wtp_emb_kick_" + runId + ".cmd");
+    kick.encoding = "UTF-8";
+    if (!kick.open("w")) return false;
+    try {
+      kick.write("@echo off\r\n");
+      kick.write(
+        "start \"wtp-emb\" /MIN powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File " +
+          quoteCmdArg(boot.fsName) +
+          " -RepoRoot " +
+          quoteCmdArg(String(repoHostFs || "")) +
+          " -ProgressFile " +
+          quoteCmdArg(progF.fsName) +
+          " -ErrFile " +
+          quoteCmdArg(errF.fsName) +
+          "\r\n"
+      );
+      kick.write("exit /b 0\r\n");
+    } finally {
+      kick.close();
+    }
+    try {
+      app.system("cmd /d/c " + quoteCmdArg(kick.fsName));
+    } catch (_) {}
+    try {
+      kick.remove();
+    } catch (_) {}
+
+    var w = new Window("palette", "\u5b89\u88c5\u5185\u7f6e Python");
+    var pb = w.add("progressbar", undefined, 0, 100, 0);
+    try {
+      pb.preferredSize = [360, 14];
+    } catch (_) {}
+    var st = w.add("statictext", undefined, "\u8bf7\u7a0d\u5019\u2026", { multiline: true });
+    try {
+      st.preferredSize = [360, 48];
+    } catch (_) {}
+    w.show();
+    var t0 = new Date().getTime();
+    var okOut = false;
+    while (new Date().getTime() - t0 < 180000) {
+      $.sleep(260);
+      var pct = NaN;
+      try {
+        if (progF.exists && progF.open("r")) {
+          var raw = progF.read();
+          progF.close();
+          pct = parseInt(String(raw).replace(/^\s+|\s+$/g, ""), 10);
+        }
+      } catch (_) {}
+      if (!isNaN(pct)) {
+        if (pct < 0) {
+          st.text = "\u5931\u8d25";
+          pb.value = 0;
+          try {
+            w.update();
+          } catch (_) {}
+          break;
+        }
+        pb.value = Math.min(100, Math.max(0, pct));
+        st.text = "\u5b89\u88c5\u4e2d " + String(pct) + "%";
+      }
+      try {
+        w.update();
+      } catch (_) {}
+      if (new File(getSynthEmbedPythonFsName()).exists) {
+        pb.value = 100;
+        st.text = "\u5b8c\u6210";
+        try {
+          w.update();
+        } catch (_) {}
+        okOut = true;
+        break;
+      }
+    }
+    try {
+      w.close();
+    } catch (_) {}
+
+    if (!okOut) {
+      var errMsg = "";
+      try {
+        if (errF.exists && errF.open("r")) {
+          errMsg = String(errF.read() || "");
+          errF.close();
+        }
+      } catch (_) {}
+      if (errMsg) {
+        try {
+          alert(errMsg.slice(0, 800));
+        } catch (_) {}
+      } else if (!new File(getSynthEmbedPythonFsName()).exists) {
+        try {
+          alert(
+            "\u672a\u5b89\u88c5\u6210\u529f\u3002\u8bf7\u5728 host/repo/environment_dependencies \u653e\u7f6e python-3.12.7-embed-amd64.zip \u4e0e get-pip.py\uff08\u89c1 README.txt\u3002"
+          );
+        } catch (_) {}
+      }
+    }
+    try {
+      progF.remove();
+    } catch (_) {}
+    try {
+      errF.remove();
+    } catch (_) {}
+    return new File(getSynthEmbedPythonFsName()).exists;
+  }
+
+  function runBootstrapEmbedPython() {
+    return ensureEmbedPythonWithUi(File($.fileName).parent.fsName);
+  }
+
+  function runSynthBoldPythonOnce(scriptFile, srcFile, dstFile, shiftEmStr) {
+    var tempDir = Folder.temp;
+    var runId = String(new Date().getTime());
+    var logFile = new File(tempDir.fsName + "/word_import_synth_bold_" + runId + ".log");
+    var scriptArgs =
+      quoteCmdArg(scriptFile.fsName) +
+      " --input " +
+      quoteCmdArg(srcFile.fsName) +
+      " --output " +
+      quoteCmdArg(dstFile.fsName) +
+      " --shift-em " +
+      String(shiftEmStr || "0.028");
+    var launchers = getSynthPythonLaunchers();
+    var ok = false;
+    var used = "";
+    var li;
+    for (li = 0; li < launchers.length; li++) {
+      var launcher = launchers[li];
+      var safeLauncher = String(launcher).replace(/[^a-zA-Z0-9]+/g, "_");
+      var runner = new File(tempDir.fsName + "/word_import_synth_bold_" + safeLauncher + "_" + runId + ".cmd");
+      runner.encoding = "UTF-8";
+      if (!runner.open("w")) continue;
+      try {
+        runner.write(synthRunnerCmdPreamble("WTP build SynthBold TTF"));
+        runner.write(launcher + " " + scriptArgs + " > " + quoteCmdArg(logFile.fsName) + " 2>&1\r\n");
+        runner.write("exit /b %errorlevel%\r\n");
+      } finally {
+        runner.close();
+      }
+      var cmd = synthRunnerInvokeCmd(runner.fsName);
+      try {
+        app.system(cmd);
+      } catch (eSys) {}
+      try {
+        runner.remove();
+      } catch (_) {}
+      if (dstFile.exists) {
+        ok = true;
+        used = launcher;
+        break;
+      }
+    }
+    var logText = "";
+    try {
+      if (logFile.exists) {
+        logFile.encoding = "UTF-8";
+        if (logFile.open("r")) {
+          try {
+            logText = String(logFile.read() || "");
+          } finally {
+            logFile.close();
+          }
+        }
+      }
+    } catch (_) {}
+    return { ok: ok, used: used, logText: logText, logPath: logFile.fsName };
+  }
+
+  function runSynthPreviewPngOnce(repoHostFs, scriptGen, scriptPrev, srcFile, shiftStr, sampleText, pngOut) {
+    var tempDir = Folder.temp;
+    var runId = String(new Date().getTime());
+    var logFile = new File(tempDir.fsName + "/word_import_synth_prev_" + runId + ".log");
+    var tx = String(sampleText || "\u662f").replace(/^\s+|\s+$/g, "") || "\u662f";
+    var scriptArgs =
+      quoteCmdArg(scriptPrev.fsName) +
+      " --input " +
+      quoteCmdArg(srcFile.fsName) +
+      " --generator " +
+      quoteCmdArg(scriptGen.fsName) +
+      " --output " +
+      quoteCmdArg(pngOut.fsName) +
+      " --text " +
+      quoteCmdArg(tx) +
+      " --shift-em " +
+      String(shiftStr || "0.028");
+    var launchers = getSynthPythonLaunchers();
+    var ok = false;
+    var li;
+    for (li = 0; li < launchers.length; li++) {
+      var launcher = launchers[li];
+      var safeLauncher = String(launcher).replace(/[^a-zA-Z0-9]+/g, "_");
+      var runner = new File(tempDir.fsName + "/word_import_synth_prev_" + safeLauncher + "_" + runId + ".cmd");
+      runner.encoding = "UTF-8";
+      if (!runner.open("w")) continue;
+      try {
+        runner.write(synthRunnerCmdPreamble("WTP PNG preview"));
+        runner.write(launcher + " " + scriptArgs + " > " + quoteCmdArg(logFile.fsName) + " 2>&1\r\n");
+        runner.write("exit /b %errorlevel%\r\n");
+      } finally {
+        runner.close();
+      }
+      try {
+        app.system(synthRunnerInvokeCmd(runner.fsName));
+      } catch (_) {}
+      try {
+        runner.remove();
+      } catch (_) {}
+      if (pngOut.exists) {
+        ok = true;
+        break;
+      }
+    }
+    return ok;
+  }
+
+  function runSyntheticBoldGeneration() {
+    var repoHost = File($.fileName).parent.fsName;
+    var scriptFile = new File(repoHost + "/tools/generate_synthetic_bold_font.py");
+    var prevScript = new File(repoHost + "/tools/render_synth_preview_png.py");
+    var phImg = new File(repoHost + "/tools/preview_placeholder.png");
+    if (!scriptFile.exists) {
+      try {
+        alert("找不到生成脚本（应与 import_panel.jsx 同目录 tools/）：\n" + scriptFile.fsName);
+      } catch (_) {}
+      return;
+    }
+    if (!prevScript.exists) {
+      try {
+        alert("\u7f3a\u5c11\u9884\u89c8\u811a\u672c:\n" + prevScript.fsName);
+      } catch (_) {}
+      return;
+    }
+    var src = File.openDialog("选择 Regular 字体（需含 TrueType 轮廓 / glyf）", "*.ttf;*.ttc;*.otf");
+    if (!src || !src.exists) return;
+    var baseLeaf = String(src.name || "Font");
+    var dot = baseLeaf.lastIndexOf(".");
+    if (dot >= 0) baseLeaf = baseLeaf.substring(0, dot);
+    var parent = src.parent.fsName;
+    var outPath = parent + "/" + baseLeaf + "-SynthBold.ttf";
+    var dstTry = new File(outPath);
+    if (dstTry.exists) {
+      outPath = parent + "/" + baseLeaf + "-SynthBold-" + String(new Date().getTime()) + ".ttf";
+    }
+    var dstFile = new File(outPath);
+
+    var dlg = new Window("dialog", "\u5408\u6210\u7c97\u4f53 TTF");
+    dlg.orientation = "column";
+    dlg.alignChildren = "fill";
+    dlg.spacing = 8;
+    dlg.margins = 14;
+    dlg.add("statictext", undefined, "\u6e90: " + src.fsName, { multiline: true });
+    var rowSample = dlg.add("group");
+    rowSample.add("statictext", undefined, "\u9884\u89c8\u6587\u5b57:");
+    var etSample = rowSample.add("edittext", undefined, "\u662f");
+    try {
+      etSample.preferredSize = [200, 22];
+    } catch (_) {}
+    var rowSl = dlg.add("group");
+    rowSl.orientation = "row";
+    try {
+      rowSl.alignChildren = "center";
+    } catch (_) {}
+    rowSl.add("statictext", undefined, "\u52a0\u7c97\u5e45\u5ea6 (EM):");
+    var btnShiftMinus = rowSl.add("button", undefined, "\u2212");
+    try {
+      setButtonSize(btnShiftMinus, 30, 22);
+    } catch (_) {}
+    var etShiftEm = rowSl.add("edittext", undefined, "0.028");
+    try {
+      etShiftEm.preferredSize = [56, 22];
+      etShiftEm.helpTip =
+        "\u52a0\u7c97\u5e45\u5ea6\u53d6\u503c 0.010\uff5e0.055\uff08\u5355\u4f4d EM\uff09\u3002\u53ef\u8f93\u5165\u6570\u5b57\uff0c\u6216\u7528\u4e24\u4fa7\u7684\u300c\u2212\u300d\u300c+\u300d\u8c03\u6574\uff1b\u6539\u5b8c\u540e\u70b9\u300c\u786e\u5b9a\u300d\u5237\u65b0\u9884\u89c8\u56fe\u3002";
+    } catch (_) {}
+    var btnShiftPlus = rowSl.add("button", undefined, "+");
+    try {
+      setButtonSize(btnShiftPlus, 30, 22);
+    } catch (_) {}
+    var btnPreviewConfirm = rowSl.add("button", undefined, "\u786e\u5b9a");
+    try {
+      setButtonSize(btnPreviewConfirm, 52, 22);
+      btnPreviewConfirm.helpTip =
+        "\u6309\u5f53\u524d\u52a0\u7c97\u5e45\u5ea6\u4e0e\u9884\u89c8\u6587\u5b57\u5237\u65b0\u4e0b\u65b9\u9884\u89c8\u56fe\u3002";
+    } catch (_) {}
+    function clampShiftEmStr(s) {
+      var raw = String(s || "")
+        .replace(/^\s+|\s+$/g, "")
+        .replace(",", ".");
+      var v = parseFloat(raw);
+      if (isNaN(v)) v = 0.028;
+      if (v < 0.01) v = 0.01;
+      if (v > 0.055) v = 0.055;
+      v = Math.round(v * 1000) / 1000;
+      return v.toFixed(3);
+    }
+    function getShiftEmStr() {
+      return clampShiftEmStr(etShiftEm.text);
+    }
+    function applyShiftEmFromUi() {
+      try {
+        etShiftEm.text = clampShiftEmStr(etShiftEm.text);
+      } catch (_) {}
+      try {
+        doPngPreview();
+      } catch (_) {}
+    }
+    btnShiftMinus.onClick = function () {
+      try {
+        var v = parseFloat(clampShiftEmStr(etShiftEm.text));
+        v = Math.max(0.01, Math.round((v - 0.001) * 1000) / 1000);
+        etShiftEm.text = v.toFixed(3);
+      } catch (_) {}
+    };
+    btnShiftPlus.onClick = function () {
+      try {
+        var v = parseFloat(clampShiftEmStr(etShiftEm.text));
+        v = Math.min(0.055, Math.round((v + 0.001) * 1000) / 1000);
+        etShiftEm.text = v.toFixed(3);
+      } catch (_) {}
+    };
+    btnPreviewConfirm.onClick = function () {
+      applyShiftEmFromUi();
+    };
+    dlg.add("statictext", undefined, "\u8c03\u6574\u52a0\u7c97\u5e45\u5ea6\u6216\u9884\u89c8\u6587\u5b57\u540e\uff0c\u70b9\u300c\u786e\u5b9a\u300d\u5237\u65b0\u9884\u89c8\u56fe\u3002", {
+      multiline: true
+    });
+    dlg.add("statictext", undefined, "\u5de6\u4fa7\u6e90\u5b57\uff0c\u4e2d\u4eff\u7c97\u8fd1\u4f3c\uff0c\u53f3\u5408\u6210\uff08\u5747\u4ece\u6587\u4ef6\u76f4\u8bfb\uff0c\u65e0\u9700\u5b89\u88c5\u9884\u89c8\u5b57\u4f53\uff09\u3002", {
+      multiline: true
+    });
+    var pngPath = Folder.temp.fsName + "/word_import_synth_ui_preview_" + String(new Date().getTime()) + ".png";
+    var pngFile = new File(pngPath);
+    var imgCtrl = null;
+    if (phImg.exists) {
+      try {
+        imgCtrl = dlg.add("image", undefined, phImg);
+      } catch (_) {
+        imgCtrl = null;
+      }
+    }
+    if (!imgCtrl) {
+      dlg.add("statictext", undefined, "(PNG \u9884\u89c8\u4e0d\u53ef\u7528)");
+    } else {
+      try {
+        imgCtrl.preferredSize = [560, 200];
+      } catch (_) {}
+    }
+    function doPngPreview() {
+      if (!imgCtrl) return;
+      if (!new File(getSynthEmbedPythonFsName()).exists) return;
+      var sh = getShiftEmStr();
+      if (pngFile.exists) {
+        try {
+          pngFile.remove();
+        } catch (_) {}
+      }
+      var okP = runSynthPreviewPngOnce(repoHost, scriptFile, prevScript, src, sh, etSample.text, pngFile);
+      if (okP && pngFile.exists) {
+        try {
+          imgCtrl.image = pngFile;
+        } catch (_) {}
+      }
+    }
+    var rowEnd = dlg.add("group");
+    var btOk = rowEnd.add("button", undefined, "\u751f\u6210");
+    var btCancel = rowEnd.add("button", undefined, "\u53d6\u6d88");
+    btCancel.onClick = function () {
+      try {
+        dlg.close(0);
+      } catch (_) {}
+    };
+    btOk.onClick = function () {
+      var sh = getShiftEmStr();
+      if (!new File(getSynthEmbedPythonFsName()).exists) {
+        if (!ensureEmbedPythonWithUi(repoHost)) {
+          try {
+            alert("\u65e0\u6cd5\u5b89\u88c5\u5185\u7f6e Python\uff0c\u8bf7\u68c0\u67e5 environment_dependencies \u6587\u4ef6\u5939\u3002");
+          } catch (_) {}
+          return;
+        }
+      }
+      var r = runSynthBoldPythonOnce(scriptFile, src, dstFile, sh);
+      if (!r.ok) {
+        if (!ensureEmbedPythonWithUi(repoHost)) {
+          try {
+            alert("\u751f\u6210\u5931\u8d25\u3002");
+          } catch (_) {}
+          return;
+        }
+        r = runSynthBoldPythonOnce(scriptFile, src, dstFile, sh);
+      }
+      if (!r.ok) {
+        var hint = r.logText ? r.logText.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "").slice(0, 400) : "";
+        try {
+          alert("\u751f\u6210\u5931\u8d25\u3002\n" + (hint ? hint : r.logPath));
+        } catch (_) {}
+        log("合成粗体生成失败。" + (hint ? " " + hint : ""));
+        return;
+      }
+      log("合成粗体已生成: " + dstFile.fsName + " （Python: " + r.used + "）请安装字体 → 刷新列表 → 在「加粗字体」选取。");
+      try {
+        refreshFontDropdownsFromProject(state.cfg || {}, "after_synth_bold_gen");
+      } catch (_) {}
+      try {
+        dlg.close(1);
+      } catch (_) {}
+      try {
+        alert(
+          "\u5df2\u5199\u5165\uff1a\n" +
+            dstFile.fsName +
+            "\n\n\u5b89\u88c5\u540e\u70b9\u300c\u5237\u65b0\u7cfb\u7edf\u5b57\u4f53\u5217\u8868\u300d\uff0c\u518d\u5728\u300c\u52a0\u7c97\u5b57\u4f53\u300d\u4e2d\u9009\u62e9\u3002"
+        );
+      } catch (_) {}
+    };
+    if (!new File(getSynthEmbedPythonFsName()).exists) {
+      log("\u9996\u6b21\u4f7f\u7528\u5c06\u5b89\u88c5\u5185\u7f6e Python\uff08\u79bb\u7ebf\u5305\uff0c\u8bf7\u7a0d\u5019\uff09...");
+      ensureEmbedPythonWithUi(repoHost);
+    }
+    if (new File(getSynthEmbedPythonFsName()).exists) {
+      try {
+        doPngPreview();
+      } catch (_) {}
+    }
+    dlg.show();
+    try {
+      if (pngFile.exists) pngFile.remove();
+    } catch (_) {}
+  }
+
   btnRescan.onClick = function () {
     try {
       loadContextAndBinding();
@@ -1072,7 +1654,13 @@
       log("加粗字体选择失败: " + (e && e.message ? e.message : e));
     }
   };
-
+  btnGenerateSynthBold.onClick = function () {
+    try {
+      runSyntheticBoldGeneration();
+    } catch (e) {
+      log("合成粗体生成异常: " + (e && e.message ? e.message : e));
+    }
+  };
   pageList.onChange = function () { updatePageInfo(); };
 
   btnImportCurrent.onClick = function () {

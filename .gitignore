@@ -4,3 +4,5 @@ out/
 *.tmp
 *.temp
 ~$*
+environment_dependencies/*.zip
+environment_dependencies/*.ZIP

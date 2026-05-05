@@ -1,0 +1,3 @@
+# 内置「合成粗体 TTF」生成（tools/generate_synthetic_bold_font.py）与 PNG 预览
+fonttools>=4.42
+Pillow>=9.2
