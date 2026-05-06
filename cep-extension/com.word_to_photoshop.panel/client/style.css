@@ -4,19 +4,38 @@
   box-sizing: border-box;
 }
 
-body {
+html {
+  height: 100%;
   margin: 0;
-  min-height: 100%;
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   background: radial-gradient(1200px 800px at 10% -20%, #2d3542 0%, #1a1d24 42%, #12141a 100%);
   color: #e8eaef;
   font: 13px/1.5 "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
+body::-webkit-scrollbar {
+  width: 8px;
+}
+
+body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}
+
 .shell {
-  min-height: 100vh;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
+  /* Solid column base so footer / gaps match cards; body gradient alone caused a hard edge under quotesCard. */
+  background-color: #1d1f27;
 }
 
 .noCepBanner {
@@ -49,6 +68,7 @@ body {
 }
 
 .appHeader {
+  flex-shrink: 0;
   padding: 14px 16px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent);
@@ -94,8 +114,7 @@ body {
 }
 
 .wrap {
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
   padding: 12px 14px 16px;
   display: flex;
   flex-direction: column;
@@ -109,6 +128,10 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.07);
   background: rgba(18, 20, 28, 0.65);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+}
+
+.wrap > .panelSection:not(.quotesCard) {
+  flex-shrink: 0;
 }
 
 .sectionHead {
@@ -196,9 +219,9 @@ button:active {
 .card.quotesCard {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 240px;
+  flex: 0 1 auto;
   padding-bottom: 10px;
+  gap: 10px;
 }
 
 .quoteHeader {
@@ -206,13 +229,20 @@ button:active {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
 .quoteSubtitle {
   margin-top: 2px;
   font-size: 11px;
+  line-height: 1.35;
   color: rgba(232, 234, 239, 0.45);
+}
+
+.card.quotesCard .quoteHeader,
+.card.quotesCard > .quoteToolbar {
+  flex-shrink: 0;
+  margin-bottom: 0;
 }
 
 .quoteHeaderActions {
@@ -230,17 +260,35 @@ button:active {
   margin-bottom: 10px;
 }
 
+.pageToolbarRow {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.pageToolbarRow #pageSelect {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 0;
+}
+
 .quoteToolbar label {
   flex-shrink: 0;
   font-size: 12px;
   color: rgba(232, 234, 239, 0.55);
 }
 
+.pageToolbarRow .pageNavLabel {
+  font-size: 11px;
+  color: rgba(232, 234, 239, 0.5);
+  margin: 0;
+}
+
 #pageSelect {
-  flex: 1;
-  min-width: 120px;
+  flex: 1 1 0;
+  min-width: 0;
   height: 30px;
-  padding: 0 8px;
+  padding: 0 6px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.35);
   color: #e8eaef;
@@ -253,6 +301,25 @@ button:active {
   font-size: 12px;
   border-radius: 6px;
   flex-shrink: 0;
+}
+
+.pageToolbarRow .pageNavBtn {
+  padding: 0 6px;
+  flex-shrink: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.quoteTopBtn {
+  opacity: 0.45;
+}
+
+.quoteTopBtn:not(:disabled):hover {
+  opacity: 1;
+}
+
+.quoteTopBtn.atTop {
+  opacity: 0.35;
 }
 
 .miniBtnPrimary {
@@ -274,14 +341,16 @@ button:active {
 }
 
 .quoteList {
-  flex: 1;
-  min-height: 140px;
-  overflow: auto;
+  flex: 0 1 auto;
+  min-height: 100px;
+  max-height: 280px;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 4px;
-  margin: -4px;
+  margin: 0;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
@@ -333,6 +402,14 @@ button:active {
   line-height: 1.5;
 }
 
+.quoteText strong {
+  font-weight: 700;
+}
+
+.quoteText em {
+  font-style: italic;
+}
+
 .quoteEmpty {
   color: rgba(232, 234, 239, 0.4);
   font-size: 12px;
@@ -341,7 +418,8 @@ button:active {
 }
 
 .logFooter {
-  margin-top: 4px;
+  margin-top: 0;
+  flex-shrink: 0;
 }
 
 .logLabel {
@@ -356,7 +434,8 @@ button:active {
 
 #logBox {
   width: 100%;
-  min-height: 180px;
+  min-height: 72px;
+  max-height: 140px;
   padding: 10px 11px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);

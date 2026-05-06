@@ -49,6 +49,24 @@
     cfg: null
   };
 
+  /** ScriptUI DropDownList selection state is unreliable in this host — use radiobuttons for textAntiAlias. */
+  var AA_KEYS_ANTI_ALIAS = ["none", "sharp", "crisp", "strong", "smooth"];
+  var AA_LABELS_ANTI_ALIAS = ["无", "锐利", "犀利", "浑厚", "平滑"];
+  var panelTextAntiAliasKey = "smooth";
+  var rbAntiAlias = [];
+
+  function syncPanelTextAntiAliasFromRadios() {
+    var ri;
+    for (ri = 0; ri < rbAntiAlias.length; ri++) {
+      try {
+        if (rbAntiAlias[ri].value) {
+          panelTextAntiAliasKey = AA_KEYS_ANTI_ALIAS[ri];
+          break;
+        }
+      } catch (_) {}
+    }
+  }
+
   var DEFAULT_FONT_FAMILY_FALLBACK = ["Microsoft YaHei", "微软雅黑", "Microsoft YaHei UI"];
   var DEFAULT_FONT_REGULAR_FALLBACK = ["MicrosoftYaHei", "MicrosoftYaHeiUI", "MicrosoftYaHeiUI-Regular"];
   var DEFAULT_FONT_BOLD_FALLBACK = ["MicrosoftYaHei-Bold", "MicrosoftYaHeiUI-Bold"];
@@ -89,12 +107,12 @@
     return fonts.exists ? fonts : null;
   }
 
-  var w = new Window("palette", "漫画汉化导入助手 1.2 · 设置面板", undefined, { resizeable: true });
+  var w = new Window("palette", "漫画汉化导入助手 1.25 · 设置面板", undefined, { resizeable: true });
   w.orientation = "column";
   w.alignChildren = "fill";
   w.spacing = 12;
   w.margins = 14;
-  w.minimumSize = [520, 680];
+  w.minimumSize = [520, 720];
   w.preferredSize = [560, 760];
 
   var topBar = w.add("group");
@@ -105,7 +123,7 @@
   topLine.orientation = "row";
   topLine.alignment = "fill";
   topLine.spacing = 6;
-  var brandTitle = topLine.add("statictext", undefined, "漫画汉化导入助手 1.2 · 设置面板");
+  var brandTitle = topLine.add("statictext", undefined, "漫画汉化导入助手 1.25 · 设置面板");
   var topSpacer = topLine.add("statictext", undefined, "");
   topSpacer.alignment = ["fill", "center"];
   var btnClosePanel = topLine.add("button", undefined, "×");
@@ -170,25 +188,57 @@
   rowColor.add("statictext", undefined, "字体颜色");
   var inputColorHex = rowColor.add("edittext", undefined, "");
   inputColorHex.characters = 10;
-  inputColorHex.helpTip = "十六进制，如 #222222";
+  inputColorHex.helpTip = "十六进制，如 #000000";
+
+  var rowAntiAlias = cfgPanel.add("group");
+  rowAntiAlias.orientation = "row";
+  rowAntiAlias.alignChildren = "left";
+  rowAntiAlias.spacing = 8;
+  rowAntiAlias.add("statictext", undefined, "文字抗锯齿");
+  var grpAaRadios = rowAntiAlias.add("group");
+  grpAaRadios.orientation = "row";
+  grpAaRadios.spacing = 6;
+  grpAaRadios.alignChildren = "left";
+  rbAntiAlias.length = 0;
+  var _ai;
+  for (_ai = 0; _ai < AA_LABELS_ANTI_ALIAS.length; _ai++) {
+    rbAntiAlias.push(grpAaRadios.add("radiobutton", undefined, AA_LABELS_ANTI_ALIAS[_ai]));
+  }
+  try {
+    rbAntiAlias[4].value = true;
+  } catch (_) {}
+  grpAaRadios.helpTip = "与 Photoshop 字符面板一致；更改后立即写入 settings.json。";
+
+  var rowBubbleTextKind = cfgPanel.add("group");
+  rowBubbleTextKind.orientation = "column";
+  rowBubbleTextKind.alignChildren = "left";
+  rowBubbleTextKind.spacing = 4;
+  rowBubbleTextKind.add("statictext", undefined, "CEP 气泡投放文字类型");
+  var chkBubblePlacementParagraph = rowBubbleTextKind.add(
+    "checkbox",
+    undefined,
+    "使用段落文字（推荐）；取消勾选为点文字（单行，适合短句）"
+  );
+  chkBubblePlacementParagraph.helpTip =
+    "勾选：CEP 在画板点一下时按 mask 对白框投放段落文字（可换行）。取消：在点击处投放单行点文字。勾选后立即写入 settings.json。";
 
   var cfgJsonHint = cfgPanel.add(
     "statictext",
     undefined,
-    "提示：框宽、起始坐标、列间距等参数请在 settings.json 中调整（位置：%APPDATA%\\com.word_to_photoshop\\settings.json）。",
-    { multiline: false }
-  );
-  var cfgDerivedBoldHint = cfgPanel.add(
-    "statictext",
-    undefined,
-    "无官方粗体时可用「生成合成粗体 TTF」在同目录写出字体文件（需 Python）。安装后在「加粗字体」里选取即可；详见 docs/optional_derived_bold_font.md。",
+    "提示：框宽、起始坐标、列间距等在 settings.json（%APPDATA%\\com.word_to_photoshop\\settings.json）。上方「文字抗锯齿」「CEP 气泡文字类型」更改后立即保存。",
     { multiline: true }
   );
   try {
-    cfgDerivedBoldHint.preferredSize.width = 460;
+    cfgJsonHint.preferredSize = [480, 36];
   } catch (_) {}
 
-  var rowFontSelect = cfgPanel.add("group");
+  var fontPickPanel = cfgPanel.add("panel", undefined, "字体与合成粗体");
+  fontPickPanel.orientation = "column";
+  fontPickPanel.alignChildren = "fill";
+  fontPickPanel.spacing = 8;
+  fontPickPanel.margins = 10;
+
+  var rowFontSelect = fontPickPanel.add("group");
   rowFontSelect.orientation = "column";
   rowFontSelect.alignChildren = "fill";
   rowFontSelect.spacing = 6;
@@ -213,13 +263,23 @@
   btnGenerateSynthBold.helpTip =
     "选择源字体后，在同一窗口调节加粗幅度与预览文字，点「确定」刷新 PNG 对比（源字 / 仿粗近似 / 合成），满意后点「生成」写出「原名-SynthBold.ttf」。首次若未装 Python，将从 host/repo/environment_dependencies 离线安装内置版（见该目录 README）。";
 
-  var rowFontImport = cfgPanel.add("group");
+  var txtSynthBoldHint = fontPickPanel.add(
+    "statictext",
+    undefined,
+    "合成粗体说明：无官方粗体时可用上方「生成 TTF…」写出字体（需 Python）。安装生成的 TTF 后点「刷新系统字体列表」，再在「加粗字体」中选「…-SynthBold」。详见仓库 docs/optional_derived_bold_font.md。",
+    { multiline: true }
+  );
+  try {
+    txtSynthBoldHint.preferredSize = [470, 52];
+  } catch (_) {}
+
+  var rowFontImport = fontPickPanel.add("group");
   rowFontImport.spacing = 8;
   var btnPickFontFile = rowFontImport.add("button", undefined, "刷新系统字体列表");
   btnPickFontFile.helpTip = "扫描扩展内置 fonts/ 与 %APPDATA%\\com.word_to_photoshop\\fonts，并刷新可选字体列表";
   var btnSaveDefaults = rowFontImport.add("button", undefined, "保存为默认");
 
-  var rowFontImport2 = cfgPanel.add("group");
+  var rowFontImport2 = fontPickPanel.add("group");
   rowFontImport2.spacing = 8;
   var btnRestoreDefaultFont = rowFontImport2.add("button", undefined, "恢复默认字体（微软雅黑）");
   btnRestoreDefaultFont.helpTip =
@@ -268,6 +328,9 @@
   safeSetTextColor(brandTitle, colorAccent);
   safeSetTextColor(topSub, colorMuted);
   safeSetTextColor(cfgJsonHint, colorMutedHint);
+  try {
+    safeSetTextColor(txtSynthBoldHint, colorMutedHint);
+  } catch (_) {}
   safeSetTextColor(psdText, colorLabel);
   safeSetTextColor(dataText, colorLabel);
   safeSetTextColor(actionHint, [0.35, 0.5, 0.35]);
@@ -972,7 +1035,7 @@
   }
 
   function rgbToHex(rgb) {
-    if (!rgb || rgb.length < 3) return "#222222";
+    if (!rgb || rgb.length < 3) return "#000000";
     function h(n0) {
       var n = Math.max(0, Math.min(255, Math.round(Number(n0))));
       var s = n.toString(16);
@@ -982,7 +1045,7 @@
   }
 
   function parseHexColor(str, fb) {
-    var fallback = fb && fb.length >= 3 ? fb : [34, 34, 34];
+    var fallback = fb && fb.length >= 3 ? fb : [0, 0, 0];
     var s = String(str || "").replace(/^\s*#?\s*/, "").replace(/\s*$/,"");
     if (/^[0-9a-fA-F]{6}$/.test(s)) {
       return [
@@ -998,7 +1061,9 @@
     var cfg = state.cfg;
     cfg.fontSizePt = parseNum(inputFontSize.text, cfg.fontSizePt != null ? cfg.fontSizePt : 26);
     cfg.lineSpacingPt = parseNum(inputLineSpacing.text, cfg.lineSpacingPt != null ? cfg.lineSpacingPt : 31);
-    cfg.textColorRgb = parseHexColor(inputColorHex.text, cfg.textColorRgb || [34, 34, 34]);
+    cfg.textColorRgb = parseHexColor(inputColorHex.text, cfg.textColorRgb || [0, 0, 0]);
+    cfg.textAntiAlias = panelTextAntiAliasKey || "smooth";
+    cfg.bubblePlacementUseParagraphText = !!chkBubblePlacementParagraph.value;
     // 正文字体 / 加粗字体仅由「选择…」列表对话框写入 cfg，不再从下拉读取（避免 Win ScriptUI 下拉不同步）。
     // #region agent log
     agentDbgLog("import_panel.jsx:readCfgInputs", "scalars only", { regular0: (cfg.fontRegularCandidates && cfg.fontRegularCandidates[0]) || "", bold0: (cfg.fontBoldCandidates && cfg.fontBoldCandidates[0]) || "", fontHasRealBold: cfg.fontHasRealBold }, "H_readCfg");
@@ -1008,9 +1073,48 @@
   function writeCfgInputs(cfg) {
     inputFontSize.text = String(cfg.fontSizePt != null ? cfg.fontSizePt : 26);
     inputLineSpacing.text = String(cfg.lineSpacingPt != null ? cfg.lineSpacingPt : 31);
-    inputColorHex.text = rgbToHex(cfg.textColorRgb || [34, 34, 34]);
+    inputColorHex.text = rgbToHex(cfg.textColorRgb || [0, 0, 0]);
+    try {
+      chkBubblePlacementParagraph.value = cfg.bubblePlacementUseParagraphText !== false;
+    } catch (_) {}
+    try {
+      var aaKeysW = AA_KEYS_ANTI_ALIAS;
+      var wantAa = String(cfg.textAntiAlias || "smooth").toLowerCase();
+      var selIx = 4;
+      var aiw;
+      for (aiw = 0; aiw < aaKeysW.length; aiw++) {
+        if (aaKeysW[aiw] === wantAa) {
+          selIx = aiw;
+          break;
+        }
+      }
+      var _arx;
+      for (_arx = 0; _arx < rbAntiAlias.length; _arx++) {
+        try {
+          rbAntiAlias[_arx].value = _arx === selIx;
+        } catch (_) {}
+      }
+      panelTextAntiAliasKey = AA_KEYS_ANTI_ALIAS[selIx] || "smooth";
+    } catch (_) {}
     refreshFontDropdownsFromProject(cfg, "writeCfgInputs");
     updateFontPickedLabels(cfg);
+  }
+
+  /** 将当前面板 UI 读入 state.cfg 并写入 settings.json（即时保存；失焦时见 onDeactivate）。 */
+  function persistCfgFromInputs(logMsg) {
+    try {
+      try {
+        syncPanelTextAntiAliasFromRadios();
+      } catch (_) {}
+      readCfgInputs();
+      if (!state || !state.context || !state.context.settingsFile) {
+        return;
+      }
+      api.saveSettingsToDisk(state.context.settingsFile, state.cfg);
+      if (logMsg) log(logMsg);
+    } catch (e) {
+      log("保存设置失败: " + (e && e.message ? e.message : e));
+    }
   }
 
   function refreshPages() {
@@ -1700,6 +1804,20 @@
     }
   };
 
+  chkBubblePlacementParagraph.onClick = function () {
+    persistCfgFromInputs("已保存 CEP 气泡投放文字类型。");
+  };
+
+  var _aix;
+  for (_aix = 0; _aix < rbAntiAlias.length; _aix++) {
+    (function (ixRb) {
+      rbAntiAlias[ixRb].onClick = function () {
+        panelTextAntiAliasKey = AA_KEYS_ANTI_ALIAS[ixRb];
+        persistCfgFromInputs("已保存文字抗锯齿选项。");
+      };
+    })(_aix);
+  }
+
   w.onClose = function () {
     try {
       $.global.WORD_IMPORT_PANEL_WINDOW = null;
@@ -1728,6 +1846,9 @@
   };
 
   loadContextAndBinding();
+  w.onDeactivate = function () {
+    persistCfgFromInputs(null);
+  };
   w.onActivate = function () {};
   w.onResizing = w.onResize = function () { this.layout.resize(); };
   w.center();

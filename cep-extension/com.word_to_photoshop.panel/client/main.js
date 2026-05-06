@@ -1,7 +1,7 @@
 (function () {
-  var BUILD_ID = "2026-05-03T12:00+08 cep-v1.2";
+  var BUILD_ID = "2026-05-06T12:00+08 cep-v1.25";
   /** Keep in sync with CSXS/manifest.xml ExtensionBundleVersion and release-channel.json. */
-  var EXTENSION_BUNDLE_VERSION = "1.2.0";
+  var EXTENSION_BUNDLE_VERSION = "1.25.0";
   /** 检查更新（测试）：仅此渠道，直接打开腾讯文档，不请求 release-channel.json。 */
   var UPDATE_DOCS_URL = "https://docs.qq.com/doc/DRG9LcFd0S1pab1RZ";
   var logBox = document.getElementById("logBox");
@@ -486,6 +486,114 @@
     return null;
   }
 
+  function updatePageNavButtons() {
+    var prev = document.getElementById("btnPagePrev");
+    var next = document.getElementById("btnPageNext");
+    if (!prev || !next) return;
+    if (!pageSelect || pageSelect.disabled || pageSelect.options.length < 1) {
+      prev.disabled = true;
+      next.disabled = true;
+      return;
+    }
+    var ix = pageSelect.selectedIndex;
+    if (ix < 0) ix = 0;
+    prev.disabled = ix <= 0;
+    next.disabled = ix >= pageSelect.options.length - 1;
+  }
+
+  function selectPageByIndex(ix) {
+    if (!pageSelect || pageSelect.disabled) return;
+    var n = pageSelect.options.length;
+    if (n < 1) return;
+    ix = Math.max(0, Math.min(n - 1, Math.floor(Number(ix))));
+    if (pageSelect.selectedIndex === ix) {
+      updatePageNavButtons();
+      return;
+    }
+    pageSelect.selectedIndex = ix;
+    var ev;
+    try {
+      ev = new Event("change", { bubbles: true });
+    } catch (e0) {
+      try {
+        ev = document.createEvent("HTMLEvents");
+        ev.initEvent("change", true, true);
+      } catch (e1) {
+        renderQuoteList();
+        updatePageNavButtons();
+        return;
+      }
+    }
+    pageSelect.dispatchEvent(ev);
+  }
+
+  function goPageDelta(delta) {
+    selectPageByIndex(pageSelect.selectedIndex + Number(delta || 0));
+  }
+
+  function escapeHtml(str) {
+    return String(str == null ? "" : str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;");
+  }
+
+  /**
+   * @param {{ text?: string, segments?: Array<{ text?: string, bold?: boolean, italic?: boolean }> }} it
+   */
+  function buildRichQuoteParts(it) {
+    var plain = String(it.text || "");
+    var segs = it.segments;
+    if (!segs || !segs.length) {
+      return { html: escapeHtml(plain), plain: plain };
+    }
+    var htmlParts = [];
+    var plainParts = [];
+    var si;
+    for (si = 0; si < segs.length; si++) {
+      var sg = segs[si] || {};
+      var t = String(sg.text != null ? sg.text : "");
+      plainParts.push(t);
+      var esc = escapeHtml(t);
+      var bold = !!sg.bold;
+      var italic = !!sg.italic;
+      if (bold && italic) esc = "<strong><em>" + esc + "</em></strong>";
+      else if (bold) esc = "<strong>" + esc + "</strong>";
+      else if (italic) esc = "<em>" + esc + "</em>";
+      htmlParts.push(esc);
+    }
+    return { html: htmlParts.join(""), plain: plainParts.join("") };
+  }
+
+  function findQuoteItemForRow(row) {
+    if (!row) return null;
+    var pg = row.getAttribute("data-quote-page");
+    var pa = row.getAttribute("data-quote-paragraph");
+    if (pg == null || pa == null) return null;
+    var pageObj = getSelectedPageObj();
+    var items = (pageObj && pageObj.items) ? pageObj.items : [];
+    var i;
+    for (i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (String(it.page) === String(pg) && String(it.paragraph) === String(pa)) return it;
+    }
+    return null;
+  }
+
+  function updateQuoteScrollTopBtn() {
+    var b = document.getElementById("btnQuoteListTop");
+    if (!b || !quoteList) return;
+    var hasRows = quoteList.querySelectorAll(".quoteItem").length > 0;
+    var canScroll = quoteList.scrollHeight > quoteList.clientHeight + 2;
+    var atTop = quoteList.scrollTop <= 4;
+    b.style.display = hasRows ? "inline-block" : "none";
+    try {
+      b.classList.toggle("atTop", !canScroll || atTop);
+      b.disabled = !canScroll || atTop;
+    } catch (_) {}
+  }
+
   function renderPageOptions() {
     pageSelect.innerHTML = "";
     if (!quoteState.pages.length) {
@@ -494,6 +602,7 @@
       optEmpty.textContent = "无可用页码";
       pageSelect.appendChild(optEmpty);
       pageSelect.disabled = true;
+      updatePageNavButtons();
       return;
     }
     pageSelect.disabled = false;
@@ -507,6 +616,7 @@
     var selected = String(quoteState.defaultPage || "");
     if (selected) pageSelect.value = selected;
     if (!pageSelect.value) pageSelect.selectedIndex = 0;
+    updatePageNavButtons();
   }
 
   function selectQuoteItem(item, rowEl) {
@@ -691,6 +801,21 @@
       empty.className = "quoteEmpty";
       empty.textContent = "当前页无可选台词。";
       quoteList.appendChild(empty);
+      try {
+        quoteList.scrollTop = 0;
+      } catch (_) {}
+      try {
+        updateQuoteScrollTopBtn();
+      } catch (_) {}
+      try {
+        if (window.requestAnimationFrame) {
+          window.requestAnimationFrame(function () {
+            try {
+              updateQuoteScrollTopBtn();
+            } catch (_) {}
+          });
+        }
+      } catch (_) {}
       return;
     }
     for (var i = 0; i < items.length; i++) {
@@ -707,7 +832,12 @@
 
       var text = document.createElement("div");
       text.className = "quoteText";
-      text.textContent = it.text;
+      try {
+        row.setAttribute("data-quote-page", String(it.page));
+        row.setAttribute("data-quote-paragraph", String(it.paragraph));
+      } catch (_) {}
+      var rich = buildRichQuoteParts(it);
+      text.innerHTML = rich.html;
       row.appendChild(text);
 
       (function (item, el) {
@@ -731,6 +861,21 @@
 
       quoteList.appendChild(row);
     }
+    try {
+      quoteList.scrollTop = 0;
+    } catch (_) {}
+    try {
+      updateQuoteScrollTopBtn();
+    } catch (_) {}
+    try {
+      if (window.requestAnimationFrame) {
+        window.requestAnimationFrame(function () {
+          try {
+            updateQuoteScrollTopBtn();
+          } catch (_) {}
+        });
+      }
+    } catch (_) {}
   }
 
   function reloadQuotes() {
@@ -850,7 +995,10 @@
 
   document.getElementById("btnClearDialogues").addEventListener("click", function () {
     var ok = window.confirm(
-      "将删除当前 PSD 内所有由本工具生成的对话文本图层：\n名称以 「Word Import #」或「Bubble #」开头的文本图层（含图层组内）。\n\n此操作不可撤销。确定要继续吗？"
+      "将删除当前 PSD 内所有由本工具生成的对话文本图层：\n" +
+        "· 旧版：名称以「Word Import #」或「Bubble #」开头\n" +
+        "· 当前：名称以「对白文字」+「 # Bubble」结尾（重复对白会自动加「 (2)」等序号）\n" +
+        "以上均包含图层组内的文本图层。\n\n此操作不可撤销。确定要继续吗？"
     );
     if (!ok) {
       log("已取消清除。");
@@ -995,7 +1143,66 @@
     pendingQuote = null;
     pendingRowEl = null;
     renderQuoteList();
+    updatePageNavButtons();
   });
+
+  (function wireQuoteListScrollTop() {
+    var b = document.getElementById("btnQuoteListTop");
+    if (quoteList) {
+      quoteList.addEventListener("scroll", function () {
+        try {
+          updateQuoteScrollTopBtn();
+        } catch (_) {}
+      });
+    }
+    if (b) {
+      b.addEventListener("click", function () {
+        if (b.disabled) return;
+        try {
+          quoteList.scrollTop = 0;
+        } catch (_) {}
+        try {
+          updateQuoteScrollTopBtn();
+        } catch (_) {}
+      });
+    }
+  })();
+
+  try {
+    window.addEventListener("resize", function () {
+      try {
+        updateQuoteScrollTopBtn();
+      } catch (_) {}
+    });
+  } catch (_) {}
+
+  document.addEventListener(
+    "copy",
+    function (e) {
+      try {
+        var t = e.target;
+        if (!t || !t.closest || !quoteList) return;
+        var row = t.closest(".quoteItem");
+        if (!row || !quoteList.contains(row)) return;
+        var it = findQuoteItemForRow(row);
+        if (!it) return;
+        var rich = buildRichQuoteParts(it);
+        e.preventDefault();
+        e.stopPropagation();
+        e.clipboardData.setData("text/plain", rich.plain);
+        e.clipboardData.setData(
+          "text/html",
+          '<meta charset="utf-8"><div xmlns="http://www.w3.org/1999/xhtml">' + rich.html + "</div>"
+        );
+      } catch (_) {}
+    },
+    true
+  );
+
+  var btnPagePrevEl = document.getElementById("btnPagePrev");
+  var btnPageNextEl = document.getElementById("btnPageNext");
+  if (btnPagePrevEl) btnPagePrevEl.addEventListener("click", function () { goPageDelta(-1); });
+  if (btnPageNextEl) btnPageNextEl.addEventListener("click", function () { goPageDelta(1); });
 
   updateAlignToolbarUi();
   renderPageOptions();
@@ -1004,7 +1211,7 @@
   if (!isCepHost()) {
     showNoCepBanner();
     log(
-      "漫画汉化导入助手 1.2 已加载，但未检测到 CEP（无法与 Photoshop 通信）。build=" +
+      "漫画汉化导入助手 1.25 已加载，但未检测到 CEP（无法与 Photoshop 通信）。build=" +
         BUILD_ID +
         " v=" +
         EXTENSION_BUNDLE_VERSION
@@ -1016,7 +1223,7 @@
   bootstrapCursorProbe();
   reloadQuotes();
   log(
-    "漫画汉化导入助手 1.2（CEP）已启动。build=" + BUILD_ID + " v=" + EXTENSION_BUNDLE_VERSION
+    "漫画汉化导入助手 1.25（CEP）已启动。build=" + BUILD_ID + " v=" + EXTENSION_BUNDLE_VERSION
   );
   callHost("WORD_IMPORT_CEP.ping()", function (r) {
     var s = String(r || "");

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>漫画汉化导入助手 1.2</title>
+    <title>漫画汉化导入助手 1.25</title>
     <link rel="stylesheet" href="./client/style.css" />
   </head>
   <body>
@@ -12,7 +12,7 @@
       <header class="appHeader">
         <div class="appTitleRow">
           <span class="appMark" aria-hidden="true"></span>
-          <h1 class="appTitle">漫画汉化导入助手 1.2</h1>
+          <h1 class="appTitle">漫画汉化导入助手 1.25</h1>
         </div>
         <p class="appLead">
           CEP 提供快捷入口；排版与导入的完整选项由 <kbd>设置面板</kbd>（ScriptUI）与脚本核心处理。
@@ -58,7 +58,7 @@
           <button type="button" id="btnClearDialogues" class="btnDanger btnWide">
             清除本工具导入的对话文本
           </button>
-          <p class="sectionHint">删除 PSD 中以「Word Import #」「Bubble #」前缀的导入文本图层</p>
+          <p class="sectionHint">删除 PSD 中由本工具导入的对话文本图层：名称以「Word Import #」「Bubble #」开头，或以「 # Bubble」结尾（当前默认命名）；含图层组内。</p>
         </section>
 
         <section class="panelSection" aria-label="调试" id="devTools" style="display:none">
@@ -86,15 +86,18 @@
           <div class="quoteHeader">
             <div>
               <div class="sectionTitle-inline">逐条台词</div>
-              <div class="quoteSubtitle">点击一条台词选中（高亮）→ 切换到 Photoshop → 在画布上单击目标位置即可投放。对白框来自 PSD 同目录 mask/（由面板生成）。</div>
+              <div class="quoteSubtitle">点一下对白，再点一下画板</div>
             </div>
             <div class="quoteHeaderActions">
+              <button type="button" id="btnQuoteListTop" class="miniBtn quoteTopBtn" title="台词列表回到顶部" aria-label="台词列表回到顶部">回顶</button>
               <button type="button" id="btnReloadQuotes" class="miniBtn">刷新</button>
             </div>
           </div>
-          <div class="quoteToolbar">
-            <label for="pageSelect">页码</label>
-            <select id="pageSelect"></select>
+          <div class="quoteToolbar pageToolbarRow">
+            <button type="button" id="btnPagePrev" class="miniBtn pageNavBtn" title="上一页" aria-label="上一页">上页</button>
+            <label class="pageNavLabel" for="pageSelect">页</label>
+            <select id="pageSelect" aria-label="页码"></select>
+            <button type="button" id="btnPageNext" class="miniBtn pageNavBtn" title="下一页" aria-label="下一页">下页</button>
           </div>
           <div class="quoteToolbar alignToolbar" aria-label="画布投放文字对齐">
             <span class="alignLabel">对齐</span>
@@ -107,7 +110,7 @@
 
         <footer class="logFooter">
           <label for="logBox" class="logLabel">运行日志</label>
-          <textarea id="logBox" readonly rows="10"></textarea>
+          <textarea id="logBox" readonly rows="5"></textarea>
         </footer>
       </main>
     </div>

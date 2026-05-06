@@ -4,7 +4,7 @@ if (!$.global.WORD_IMPORT_CEP) {
   $.global.WORD_IMPORT_CEP = {};
 }
 
-$.global.WORD_IMPORT_CEP.BUILD_ID = "2026-05-03T12:00+08 cep-v1.2";
+$.global.WORD_IMPORT_CEP.BUILD_ID = "2026-05-06T12:00+08 cep-v1.25";
 
 $.global.WORD_IMPORT_CEP.ping = function () {
   return "PONG|Photoshop CEP Host Ready|build=" + ($.global.WORD_IMPORT_CEP.BUILD_ID || "");
@@ -261,7 +261,7 @@ $.global.WORD_IMPORT_CEP.openUrlInDefaultBrowser = function (urlRaw) {
   }
 };
 
-/** Remove text layers created by this tool: "Word Import #…" (batch) and "Bubble #…" (CEP drag). */
+/** Remove text layers created by this tool (legacy prefixes + names ending with " # Bubble"). */
 $.global.WORD_IMPORT_CEP.clearImportedDialogues = function () {
   try {
     if (app.name !== "Adobe Photoshop") return "ERR|请在 Photoshop 中运行";
@@ -270,7 +270,10 @@ $.global.WORD_IMPORT_CEP.clearImportedDialogues = function () {
     var doc = app.activeDocument;
 
     function matchImportName(nm) {
-      return /^Word Import #|^Bubble #/i.test(String(nm || ""));
+      var s = String(nm || "");
+      if (/^Word Import #|^Bubble #/i.test(s)) return true;
+      if (/ # Bubble$/i.test(s)) return true;
+      return false;
     }
 
     function walk(container) {

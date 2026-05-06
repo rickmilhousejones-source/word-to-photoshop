@@ -248,7 +248,9 @@ On first launch, the file is initialized from the bundled settings.default.json
       bubblePrecomputedPerDataFile: true,
       rememberLastDataFile: true,
       lastDataFile: "",
-      textColorRgb: [34, 34, 34],
+      textColorRgb: [0, 0, 0],
+      textAntiAlias: "smooth",
+      bubblePlacementUseParagraphText: true,
       bubbleTextAlign: "center",
       useParagraphLeadingActionManager: false,
       fontDerivedBoldCandidates: [],
@@ -736,7 +738,6 @@ On first launch, the file is initialized from the bundled settings.default.json
       if (templateLayer) {
         layer = templateLayer.duplicate();
         layer.visible = true;
-        layer.name = "Word Import #" + selectedPage + "-" + item.paragraphIndex;
       } else {
         layer = createTextLayer(doc, cfg, selectedPage, item.paragraphIndex);
       }
@@ -763,10 +764,16 @@ On first launch, the file is initialized from the bundled settings.default.json
         try {
           applyParagraphTypography(layer, cfg, typographyOptsFromAlignKey("left"));
         } catch (_) {}
+        try {
+          layer.name = buildUniqueImportedDialogueLayerName(doc, item.fullText);
+        } catch (_) {}
         importedCount++;
       } catch (e) {
         try { layer.textItem.contents = item.fullText; } catch (_) {}
         try { applyParagraphTypography(layer, cfg, typographyOptsFromAlignKey("left")); } catch (_) {}
+        try {
+          layer.name = buildUniqueImportedDialogueLayerName(doc, item.fullText);
+        } catch (_) {}
         errors.push({
           page: selectedPage,
           paragraph: item.paragraphIndex,
@@ -2249,6 +2256,71 @@ On first launch, the file is initialized from the bundled settings.default.json
     } catch (_) {}
   }
 
+  var BUBBLE_LAYER_SUFFIX = " # Bubble";
+
+  function applyTextAntiAliasFromCfg(textLayer, cfg) {
+    if (!textLayer || !textLayer.textItem) return;
+    if (typeof AntiAlias === "undefined") return;
+    var key = cfg && cfg.textAntiAlias != null ? String(cfg.textAntiAlias).toLowerCase() : "smooth";
+    var aa = AntiAlias.SMOOTH;
+    if (key === "none") aa = AntiAlias.NONE;
+    else if (key === "sharp") aa = AntiAlias.SHARP;
+    else if (key === "crisp") aa = AntiAlias.CRISP;
+    else if (key === "strong") aa = AntiAlias.STRONG;
+    else if (key === "smooth") aa = AntiAlias.SMOOTH;
+    try {
+      textLayer.textItem.antiAliasMethod = aa;
+    } catch (_) {
+      try {
+        textLayer.textItem.antiAlias = aa;
+      } catch (_) {}
+    }
+  }
+
+  function collectArtLayerNamesRecursive(container, map) {
+    if (!container || !container.layers) return;
+    var ls = container.layers;
+    var i;
+    for (i = 1; i <= ls.length; i++) {
+      try {
+        var lyr = ls[i];
+        if (lyr.typename === "ArtLayer") {
+          if (lyr.name) map[String(lyr.name)] = true;
+        } else if (lyr.typename === "LayerSet") {
+          collectArtLayerNamesRecursive(lyr, map);
+        }
+      } catch (_) {}
+    }
+  }
+
+  function sanitizeImportedLayerBaseName(fullText) {
+    var s = String(fullText == null ? "" : fullText);
+    s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    s = s.replace(/[\n\r\t]+/g, " ");
+    s = s.replace(/[\\\/:\*\?"<>\|]/g, "");
+    s = s.replace(/\s+/g, " ");
+    s = s.replace(/^\s+|\s+$/g, "");
+    if (!s) s = "Dialogue";
+    var maxBase = 200;
+    if (s.length > maxBase) s = s.substring(0, maxBase);
+    return s;
+  }
+
+  function buildUniqueImportedDialogueLayerName(doc, fullText) {
+    var base = sanitizeImportedLayerBaseName(fullText);
+    var used = {};
+    if (doc) collectArtLayerNamesRecursive(doc, used);
+    var name = base + BUBBLE_LAYER_SUFFIX;
+    var n = 2;
+    while (used[name]) {
+      var stem = base + " (" + n + ")";
+      if (stem.length > 200) stem = stem.substring(0, 200);
+      name = stem + BUBBLE_LAYER_SUFFIX;
+      n++;
+    }
+    return name;
+  }
+
   function forceParagraphLeadingByAM(textLayer, cfg, opts) {
     if (!textLayer) return;
     opts = opts || {};
@@ -2353,6 +2425,7 @@ On first launch, the file is initialized from the bundled settings.default.json
       forceParagraphLeadingByAM(textLayer, cfg, opts);
     }
     applyTextColorFromCfg(textLayer, cfg);
+    applyTextAntiAliasFromCfg(textLayer, cfg);
   }
 
   /**
@@ -2750,13 +2823,28 @@ On first launch, the file is initialized from the bundled settings.default.json
 
     runWithPixelUnits(function () {
       var bounds = getLayoutBounds(doc, cfg);
-      var bw = Math.max(160, Math.min(560, Number(cfg.boxWidth || 480) * 0.45));
-      var bh = Math.max(72, Math.min(320, Number(cfg.boxHeight || 180) * 0.55));
+      var paraCapW = Math.max(160, Math.min(560, Number(cfg.boxWidth || 480) * 0.45));
+      var paraCapH = Math.max(72, Math.min(320, Number(cfg.boxHeight || 180) * 0.55));
+      var bw = paraCapW;
+      var bh = paraCapH;
 
       var inset = 8;
       var x, y;
       var bubblePick = null;
-      var placeAtCursorOnly = !!(payload && payload.placeAtCursorOnly);
+      var placeAtCursorOnlyRequested = !!(payload && payload.placeAtCursorOnly);
+      var bubblePlacementUseParagraphText = !(cfg && cfg.bubblePlacementUseParagraphText === false);
+      var placeAtCursorOnly = placeAtCursorOnlyRequested;
+      if (placeAtCursorOnlyRequested && bubblePlacementUseParagraphText) {
+        placeAtCursorOnly = false;
+      }
+      var useSamplerClickParagraphBox =
+        placeAtCursorOnlyRequested &&
+        bubblePlacementUseParagraphText &&
+        String(anchorMode || "") === "docPoint" &&
+        isFinite(docX) &&
+        isFinite(docY);
+      var usePointTextPlacement =
+        placeAtCursorOnly || (!placeAtCursorOnly && !bubblePlacementUseParagraphText);
       if (anchorMode === "docPoint" && !isNaN(docX) && !isNaN(docY)) {
         x = docX - bw / 2;
         y = docY - bh / 2;
@@ -2895,10 +2983,33 @@ On first launch, the file is initialized from the bundled settings.default.json
         var innerB = c.bottom - pad;
         var innerW = Math.max(120, innerR - innerL);
         var innerH = Math.max(60, innerB - innerT);
-        bw = innerW;
-        bh = innerH;
-        x = innerL;
-        y = innerT;
+        if (useSamplerClickParagraphBox) {
+          var clickInBubble =
+            docX >= innerL && docX <= innerR && docY >= innerT && docY <= innerB;
+          if (clickInBubble) {
+            bw = Math.min(paraCapW, innerW);
+            bh = Math.min(paraCapH, innerH);
+            x = docX - bw / 2;
+            y = docY - bh / 2;
+            x = Math.max(innerL, Math.min(x, innerR - bw));
+            y = Math.max(innerT, Math.min(y, innerB - bh));
+          } else {
+            bw = paraCapW;
+            bh = paraCapH;
+            x = docX - bw / 2;
+            y = docY - bh / 2;
+          }
+        } else {
+          bw = innerW;
+          bh = innerH;
+          x = innerL;
+          y = innerT;
+        }
+      } else if (useSamplerClickParagraphBox) {
+        bw = paraCapW;
+        bh = paraCapH;
+        x = docX - bw / 2;
+        y = docY - bh / 2;
       }
 
       if (placeAtCursorOnly) {
@@ -2938,15 +3049,44 @@ On first launch, the file is initialized from the bundled settings.default.json
 
       var layer = doc.artLayers.add();
       layer.kind = LayerKind.TEXT;
-      layer.name = "Bubble #" + pageNorm + "-" + paraIx;
       layer.textItem.size = cfg.fontSizePt;
 
       var model = null;
+      var ax = x;
+      var ay = y;
+      if (usePointTextPlacement && !placeAtCursorOnly) {
+        var akPt = typoOpts.alignKey ? typoOpts.alignKey : (typoOpts.centered ? "center" : "left");
+        if (akPt === "right") ax = x + bw;
+        else if (akPt === "center") ax = x + bw / 2;
+        else ax = x;
+        ay = y + bh / 2;
+        var edgePt = 4;
+        var pxMin2 = bounds.left + edgePt;
+        var pxMax2 = bounds.left + bounds.width - edgePt;
+        var pyMin2 = bounds.top + edgePt;
+        var pyMax2 = bounds.top + bounds.height - edgePt;
+        if (!isNaN(pxMin2) && !isNaN(pxMax2) && pxMin2 <= pxMax2) {
+          if (ax < pxMin2) ax = pxMin2;
+          if (ax > pxMax2) ax = pxMax2;
+        }
+        if (!isNaN(pyMin2) && !isNaN(pyMax2) && pyMin2 <= pyMax2) {
+          if (ay < pyMin2) ay = pyMin2;
+          if (ay > pyMax2) ay = pyMax2;
+        }
+      }
       if (placeAtCursorOnly) {
         var paraLine = cloneParaWithSingleLineSegments(para);
         model = buildParagraphTextAndRanges(paraLine, font, cfg);
         layer.textItem.kind = TextType.POINTTEXT;
         layer.textItem.position = [x, y];
+        try {
+          layer.textItem.contents = " ";
+        } catch (_) {}
+      } else if (usePointTextPlacement) {
+        var paraLineMaskPt = cloneParaWithSingleLineSegments(para);
+        model = buildParagraphTextAndRanges(paraLineMaskPt, font, cfg);
+        layer.textItem.kind = TextType.POINTTEXT;
+        layer.textItem.position = [ax, ay];
         try {
           layer.textItem.contents = " ";
         } catch (_) {}
@@ -3040,12 +3180,16 @@ On first launch, the file is initialized from the bundled settings.default.json
       } catch (_) {}
       // #endregion
 
+      try {
+        layer.name = buildUniqueImportedDialogueLayerName(doc, model.fullText);
+      } catch (_) {}
+
       out.layerName = layer.name;
-      out.x = x;
-      out.y = y;
-      out.boxWidth = placeAtCursorOnly ? 0 : bw;
-      out.boxHeight = placeAtCursorOnly ? 0 : bh;
-      out.pointText = !!placeAtCursorOnly;
+      out.x = usePointTextPlacement && !placeAtCursorOnly ? ax : x;
+      out.y = usePointTextPlacement && !placeAtCursorOnly ? ay : y;
+      out.boxWidth = usePointTextPlacement ? 0 : bw;
+      out.boxHeight = usePointTextPlacement ? 0 : bh;
+      out.pointText = !!usePointTextPlacement;
       out.boundsLeft = bounds.left;
       out.boundsTop = bounds.top;
       out.detectedBubbles = bubbleCandidates ? bubbleCandidates.length : 0;
